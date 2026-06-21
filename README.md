@@ -34,13 +34,17 @@ UI/UX Requirement Alignment: A secondary challenge was managing significant inco
 1. Clone the repository:
 
 Bash
+
 git clone https://github.com/bgutsev/desk-flight-radar
+
 cd desk-flight-radar
 
 2. Install backend dependencies:
 
 Bash
+
 pip install -r requirements.txt
+
 3. Configure the application:
 
 Adjust default frontend behaviors in static/config.js.
