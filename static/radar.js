@@ -1,9 +1,17 @@
 "use strict";
 
-// ----- Config -----
-const FETCH_INTERVAL_MS = 2000;
-const RING_COUNT = 4;
-const SWEEP_SPEED = 2.0; // radians / second
+// ----- Config (defaults from static/config.js; user-editable) -----
+const CONFIG = window.RADAR_CONFIG || {};
+const FETCH_INTERVAL_MS = CONFIG.FETCH_INTERVAL_MS ?? 2000;
+const RING_COUNT = CONFIG.RING_COUNT ?? 4;
+const SWEEP_SPEED = CONFIG.SWEEP_SPEED ?? 2.0; // radians / second
+const NEARBY_FRACTION = CONFIG.NEARBY_FRACTION ?? 1 / 3;
+const DEFAULT_CENTER = {
+  lat: CONFIG.DEFAULT_LAT ?? 42.6967,
+  lon: CONFIG.DEFAULT_LON ?? 23.4114,
+};
+const DEFAULT_RADIUS = CONFIG.DEFAULT_RADIUS_KM ?? 25;
+
 const TAU = Math.PI * 2;
 // A blip lit by the sweep fades over exactly one rotation, so it is nearly
 // gone by the time the sweep comes back around to it.
@@ -13,7 +21,6 @@ const COLORS = {
   departing: "#ffb300",
   cruising: "#2b6cff",
 };
-const NEARBY_FRACTION = 1 / 3; // "landing nearby" threshold (of radius)
 
 // ----- Geo helpers (mirror app/utils/geo.py) -----
 const R_EARTH_KM = 6371.0088;
@@ -50,13 +57,14 @@ const dataStatusEl = document.getElementById("data-status");
 const dataStatusMsg = document.getElementById("data-status-msg");
 const mockToggle = document.getElementById("mock-toggle");
 const mockLabel = document.getElementById("mock-label");
-const alertsEl = document.getElementById("alerts");
+const latInput = document.getElementById("lat");
+const lonInput = document.getElementById("lon");
+const radiusInput = document.getElementById("radius");
 
 // ----- State -----
 const state = {
-  // Sofia Airport (LBSF / SOF).
-  center: { lat: 42.6967, lon: 23.4114 },
-  radius: 25,
+  center: { ...DEFAULT_CENTER },
+  radius: DEFAULT_RADIUS,
 };
 
 // Mock mode is a sticky user preference.
@@ -69,6 +77,9 @@ let mockMode = localStorage.getItem("mockMode") === "true";
 const incoming = new Map(); // icao24 -> aircraft (with _dist/_bearing/_frac)
 const rendered = new Map(); // icao24 -> { ...aircraft, intensity }
 let lastList = [];
+
+// Cached aircraft photos by registration/hex: string = url, null = none.
+const photoCache = new Map();
 
 let size = 0; // CSS pixel size of the square canvas
 let sweepAngle = 0;
@@ -83,14 +94,6 @@ let fetchInFlight = false;
 // Monotonic id so a slow/stale response is discarded — only the most recent
 // request is ever applied to the UI.
 let requestSeq = 0;
-
-// Cached flight routes by callsign: object = known, null = unknown/failed.
-const routeCache = new Map();
-
-// Aircraft already seen on radar (icao24), to detect newcomers. `firstLoad`
-// suppresses an alert burst for the initial fleet (and after a mode switch).
-let seenIds = new Set();
-let firstLoad = true;
 
 const normAngle = (a) => ((a % TAU) + TAU) % TAU;
 
@@ -112,13 +115,30 @@ function resizeCanvas() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-// ----- Inputs / mode -----
+// ----- Inputs / persistence (localStorage) -----
 function readInputs() {
   return {
-    lat: parseFloat(document.getElementById("lat").value),
-    lon: parseFloat(document.getElementById("lon").value),
-    radius: parseFloat(document.getElementById("radius").value),
+    lat: parseFloat(latInput.value),
+    lon: parseFloat(lonInput.value),
+    radius: parseFloat(radiusInput.value),
   };
+}
+
+// Load saved params on startup; fall back to the defaults only when empty.
+function loadParams() {
+  const lat = localStorage.getItem("lat");
+  const lon = localStorage.getItem("lon");
+  const radius = localStorage.getItem("radius");
+  latInput.value = lat !== null ? lat : DEFAULT_CENTER.lat;
+  lonInput.value = lon !== null ? lon : DEFAULT_CENTER.lon;
+  radiusInput.value = radius !== null ? radius : DEFAULT_RADIUS;
+}
+
+function persistParams() {
+  const { lat, lon, radius } = readInputs();
+  if (!Number.isNaN(lat)) localStorage.setItem("lat", String(lat));
+  if (!Number.isNaN(lon)) localStorage.setItem("lon", String(lon));
+  if (!Number.isNaN(radius)) localStorage.setItem("radius", String(radius));
 }
 
 function updateMockButton() {
@@ -206,15 +226,6 @@ async function fetchData() {
       `${list.length} aircraft · ` +
       `${data.mock ? "MOCK" : "LIVE"} · updated ${new Date().toLocaleTimeString()}`;
 
-    // Alert on any aircraft newly caught by the radar (skip the first load).
-    if (!firstLoad) {
-      for (const ac of list) {
-        if (!seenIds.has(ac.icao24)) spawnPlaneAlert(ac);
-      }
-    }
-    seenIds = new Set(list.map((ac) => ac.icao24));
-    firstLoad = false;
-
     renderCards();
     maybeNotifyNearby();
 
@@ -222,54 +233,6 @@ async function fetchData() {
     setWarning(list.length === 0, "NO DATA");
   } catch (err) {
     setWarning(true, "NO CONNECTION"); // network error: keep last data
-  }
-}
-
-// Build a 1-minute alert card (with a photo) for a newly caught aircraft.
-function spawnPlaneAlert(ac) {
-  const el = document.createElement("div");
-  el.className = `plane-alert ${ac.classification}`;
-  const name = ac.callsign || ac.icao24 || "——";
-  const sub = [ac.type, ac.registration].filter(Boolean).join(" · ");
-  el.innerHTML = `
-    <img class="photo" alt="" hidden />
-    <div class="info">
-      <div class="title">${name} <span class="cls">${ac.classification}</span></div>
-      <div class="sub">${sub}</div>
-      <div class="route"></div>
-      <div class="tag">NEW CONTACT</div>
-    </div>`;
-  alertsEl.appendChild(el);
-
-  loadPlanePhoto(ac, el.querySelector(".photo"));
-  fetchRoute(ac.callsign).then((route) => {
-    const r = el.querySelector(".route");
-    if (route && r) r.textContent = `✈ ${route.from} → ${route.to}`;
-  });
-
-  // Auto-remove after one minute.
-  setTimeout(() => el.remove(), 60000);
-}
-
-// Fetch a photo from planespotters by registration (preferred) or hex.
-async function loadPlanePhoto(ac, img) {
-  const endpoint = ac.registration
-    ? `reg/${encodeURIComponent(ac.registration)}`
-    : `hex/${encodeURIComponent(ac.icao24)}`;
-  try {
-    const resp = await fetch(
-      `https://api.planespotters.net/pub/photos/${endpoint}`,
-    );
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const photo = (data.photos || [])[0];
-    const src = photo && (photo.thumbnail_large?.src || photo.thumbnail?.src);
-    if (src) {
-      img.src = src;
-      img.hidden = false;
-    }
-  } catch (err) {
-    /* best-effort: leave the card without a photo */
   }
 }
 
@@ -295,42 +258,56 @@ function startPolling() {
 // Bumping requestSeq invalidates any in-flight response so only this newest
 // request is shown.
 function triggerUpdate() {
+  persistParams();
   requestSeq++;
   clearInterval(intervalId); // destroy the old loop before starting a new one
   runFetch(); // fetch immediately, don't wait for the interval
   startPolling();
 }
 
-// ----- Flight route (from → to) via adsbdb, cached by callsign -----
-function airportLabel(ap) {
-  const place =
-    ap.municipality || ap.name || ap.iata_code || ap.icao_code || ap.country_iso_name;
-  const code = ap.iata_code || ap.icao_code;
-  return code && place && place !== code ? `${place} (${code})` : place || "?";
+// ----- Aircraft photos (planespotters), cached per registration/hex -----
+function photoKey(ac) {
+  return ac.registration || ac.icao24 || "";
 }
 
-async function fetchRoute(callsign) {
-  if (!callsign) return null;
-  if (routeCache.has(callsign)) return routeCache.get(callsign);
-  routeCache.set(callsign, null); // reserve to avoid duplicate lookups
+async function fetchPhoto(ac) {
+  const key = photoKey(ac);
+  if (!key || photoCache.has(key)) return photoCache.get(key);
+  photoCache.set(key, null); // reserve to avoid duplicate lookups
+  const endpoint = ac.registration
+    ? `reg/${encodeURIComponent(ac.registration)}`
+    : `hex/${encodeURIComponent(ac.icao24)}`;
   try {
     const resp = await fetch(
-      `https://api.adsbdb.com/v0/callsign/${encodeURIComponent(callsign)}`,
+      `https://api.planespotters.net/pub/photos/${endpoint}`,
     );
     if (resp.ok) {
       const d = await resp.json();
-      const fr = d.response && d.response.flightroute;
-      if (fr && fr.origin && fr.destination) {
-        routeCache.set(callsign, {
-          from: airportLabel(fr.origin),
-          to: airportLabel(fr.destination),
-        });
-      }
+      const photo = (d.photos || [])[0];
+      const src = photo && (photo.thumbnail_large?.src || photo.thumbnail?.src);
+      if (src) photoCache.set(key, src);
     }
   } catch (err) {
-    /* leave as null (unknown) */
+    /* best-effort: leave the card without a photo */
   }
-  return routeCache.get(callsign);
+  return photoCache.get(key);
+}
+
+// ----- Route (origin/destination) supplied by the backend -----
+function airportText(ap) {
+  const place = [ap.country, ap.city, ap.airport].filter(Boolean).join(" / ");
+  return ap.code ? `${place} (${ap.code})` : place;
+}
+
+function routeHtml(ac) {
+  let lines = "";
+  if (ac.origin) {
+    lines += `<div class="route-line">From: ${airportText(ac.origin)}</div>`;
+  }
+  if (ac.destination) {
+    lines += `<div class="route-line">To: ${airportText(ac.destination)}</div>`;
+  }
+  return lines ? `<div class="route">${lines}</div>` : "";
 }
 
 function maybeNotifyNearby() {
@@ -364,22 +341,28 @@ function renderCards() {
     const type = ac.type ? `<span class="type">${ac.type}</span>` : "";
     const alt = `<span class="alt">${Math.round(ac.altitude_m)} m</span>`;
 
-    // Route appears on a later render once the lookup resolves and is cached.
-    const route = routeCache.get(ac.callsign);
-    if (route === undefined && ac.callsign) fetchRoute(ac.callsign);
-    const routeHtml = route
-      ? `<div class="route">✈ ${route.from} → ${route.to}</div>`
-      : "";
+    // Photo (cached; the card re-renders with it on a later poll).
+    const key = photoKey(ac);
+    const url = key ? photoCache.get(key) : null;
+    if (url === undefined) fetchPhoto(ac);
+    const photoHtml = url
+      ? `<img class="card-photo" src="${url}" alt="" />`
+      : `<div class="card-photo placeholder"></div>`;
 
     card.innerHTML = `
-      <span class="callsign">${callsign}</span>
-      <span class="badge">${ac.classification}</span>
-      <div>${type} ${alt}</div>
-      ${routeHtml}
-      <div class="meta">
-        ${ac._dist.toFixed(1)} km · brg ${Math.round((ac._bearing + 360) % 360)}°
-        · hdg ${Math.round(ac.heading_deg)}°
-        · ${Math.round(ac.velocity_kmh)} km/h
+      ${photoHtml}
+      <div class="card-body">
+        <div class="card-top">
+          <span class="callsign">${callsign}</span>
+          <span class="badge">${ac.classification}</span>
+        </div>
+        <div class="type-alt">${type} ${alt}</div>
+        ${routeHtml(ac)}
+        <div class="meta">
+          ${ac._dist.toFixed(1)} km · brg ${Math.round((ac._bearing + 360) % 360)}°
+          · hdg ${Math.round(ac.heading_deg)}°
+          · ${Math.round(ac.velocity_kmh)} km/h
+        </div>
       </div>`;
     cardsEl.appendChild(card);
   }
@@ -557,25 +540,34 @@ function frame(now) {
 
 // ----- Wire up -----
 // Enter in any input submits the form; both Enter and Update force an
-// immediate fetch instead of waiting for the interval.
+// immediate fetch (and persist the params) instead of waiting for the interval.
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   triggerUpdate();
 });
+
+// Persist whenever a field is edited, even without clicking Update.
+for (const input of [latInput, lonInput, radiusInput]) {
+  input.addEventListener("change", persistParams);
+}
 
 // Mock/Live toggle: flip mode, remember it, and re-fetch immediately.
 mockToggle.addEventListener("click", () => {
   mockMode = !mockMode;
   localStorage.setItem("mockMode", String(mockMode));
   updateMockButton();
-  // The whole fleet changes on a mode switch — re-baseline so we don't alert
-  // for every aircraft in the new mode.
-  firstLoad = true;
-  alertsEl.innerHTML = "";
   triggerUpdate();
 });
 
 window.addEventListener("resize", resizeCanvas);
+
+// Startup: load saved params (or defaults) before the first fetch.
+loadParams();
+const initial = readInputs();
+if (!Number.isNaN(initial.lat) && !Number.isNaN(initial.lon)) {
+  state.center = { lat: initial.lat, lon: initial.lon };
+}
+if (!Number.isNaN(initial.radius)) state.radius = initial.radius;
 
 resizeCanvas();
 updateMockButton();

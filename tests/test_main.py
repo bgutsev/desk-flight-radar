@@ -137,6 +137,71 @@ def test_aircraft_upstream_failure_serves_cached_data() -> None:
     assert cached[0]["icao24"] == "cafe01"
 
 
+def test_mock_aircraft_include_route() -> None:
+    response = client.get(
+        "/aircraft",
+        params={"lat": 42.6977, "lon": 23.3219, "radius_km": 50, "mock": True},
+    )
+
+    data = response.json()
+    swr = next(a for a in data["aircraft"] if a["icao24"] == "4b1805")
+    assert swr["origin"]["code"] == "ZRH"
+    assert swr["destination"]["code"] == "SOF"
+    # All four fields are present for formatting "Country / City / Airport (code)".
+    for field in ("country", "city", "airport", "code"):
+        assert swr["origin"][field]
+        assert swr["destination"][field]
+
+
+def test_hexdb_route_enrichment_resolves_current_route() -> None:
+    import app.clients.enrichment as enrichment
+
+    enrichment._route_cache.clear()
+    enrichment._airport_cache.clear()
+    enrichment._meta_cache.clear()
+
+    def fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "/route/icao/" in url:
+            resp.json.return_value = {"flight": "RYR1UN", "route": "LIBD-LBSF"}
+        elif "/airport/icao/LIBD" in url:
+            resp.json.return_value = {
+                "country_code": "IT",
+                "region_name": "Puglia",
+                "iata": "BRI",
+                "airport": "Bari Karol Wojtyla Airport",
+            }
+        elif "/airport/icao/LBSF" in url:
+            resp.json.return_value = {
+                "country_code": "BG",
+                "region_name": "Sofia",
+                "iata": "SOF",
+                "airport": "Sofia Airport",
+            }
+        else:  # /aircraft/<icao> metadata — none for this test
+            resp.json.return_value = {}
+        return resp
+
+    aircraft = {
+        "icao24": "abc123",
+        "callsign": "RYR1UN",
+        "type": "B738",
+        "latitude": 42.0,
+        "longitude": 23.0,
+        "altitude_m": 3000.0,
+        "velocity_kmh": 700.0,
+        "heading_deg": 0.0,
+    }
+    with patch("app.clients.enrichment.httpx.get", side_effect=fake_get):
+        out = enrichment.HexDbEnrichment().enrich(aircraft)  # type: ignore[arg-type]
+
+    assert out["origin"]["code"] == "BRI"
+    assert out["origin"]["country"] == "Italy"
+    assert out["destination"]["code"] == "SOF"
+    assert out["destination"]["airport"] == "Sofia Airport"
+
+
 def test_root_serves_radar_ui() -> None:
     response = client.get("/")
 

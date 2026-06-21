@@ -40,8 +40,11 @@ class Settings:
     # Flight source (adsb.fi).
     adsb_fi_base_url: str = "https://opendata.adsb.fi/api/v2"
 
-    # Aircraft enrichment lookup (hexdb.io).
+    # Aircraft enrichment + primary route lookup (hexdb.io).
     enrichment_base_url: str = "https://hexdb.io/api/v1"
+
+    # Fallback route lookup when hexdb has no route (adsbdb.com).
+    adsbdb_base_url: str = "https://api.adsbdb.com/v0"
 
 
 @lru_cache(maxsize=1)
@@ -56,4 +59,5 @@ def get_settings() -> Settings:
             "ADSB_FI_BASE_URL", "https://opendata.adsb.fi/api/v2"
         ),
         enrichment_base_url=os.getenv("ENRICHMENT_BASE_URL", "https://hexdb.io/api/v1"),
+        adsbdb_base_url=os.getenv("ADSBDB_BASE_URL", "https://api.adsbdb.com/v0"),
     )

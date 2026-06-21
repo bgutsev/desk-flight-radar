@@ -36,6 +36,7 @@ class Aircraft(TypedDict):
     latitude: float
     longitude: float
     altitude_m: float
+    vertical_rate_fpm: float  # ft/min; positive = climbing, negative = descending
     velocity_kmh: float
     heading_deg: float
 
@@ -64,9 +65,10 @@ class MockFlightSource:
                 type="BCS3",
                 latitude=lat + 0.08,
                 longitude=lon - 0.05,
-                altitude_m=11280,
-                velocity_kmh=835,
-                heading_deg=92,
+                altitude_m=2400,  # on approach
+                vertical_rate_fpm=-900,  # descending → arriving
+                velocity_kmh=320,
+                heading_deg=210,
             ),
             Aircraft(
                 icao24="a1b2c3",
@@ -74,8 +76,9 @@ class MockFlightSource:
                 type="A388",
                 latitude=lat - 0.12,
                 longitude=lon + 0.09,
-                altitude_m=9750,
-                velocity_kmh=790,
+                altitude_m=3100,  # just departed
+                vertical_rate_fpm=1800,  # climbing → departing
+                velocity_kmh=410,
                 heading_deg=244,
             ),
         ]
@@ -140,6 +143,7 @@ def _parse_states(payload: object) -> list[Aircraft]:
                 latitude=float(lat_val),
                 longitude=float(lon_val),
                 altitude_m=_parse_altitude_m(ac.get("alt_baro")),
+                vertical_rate_fpm=float(ac.get("baro_rate") or 0.0),
                 velocity_kmh=float(ac.get("gs") or 0.0) * _KM_PER_NM,
                 heading_deg=float(ac.get("track") or 0.0),
             )
