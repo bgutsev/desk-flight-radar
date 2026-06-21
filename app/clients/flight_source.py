@@ -25,6 +25,7 @@ class Aircraft(TypedDict):
 
     icao24: str
     callsign: str
+    type: str
     latitude: float
     longitude: float
     altitude_m: float
@@ -53,6 +54,7 @@ class MockFlightSource:
             Aircraft(
                 icao24="4b1805",
                 callsign="SWR123",
+                type="BCS3",
                 latitude=lat + 0.08,
                 longitude=lon - 0.05,
                 altitude_m=11280,
@@ -62,6 +64,7 @@ class MockFlightSource:
             Aircraft(
                 icao24="a1b2c3",
                 callsign="DLH456",
+                type="A388",
                 latitude=lat - 0.12,
                 longitude=lon + 0.09,
                 altitude_m=9750,
@@ -106,6 +109,7 @@ class AdsbFiFlightSource:
                 Aircraft(
                     icao24=ac.get("hex") or "",
                     callsign=(ac.get("flight") or "").strip(),
+                    type=(ac.get("t") or "").strip(),
                     latitude=float(lat_val),
                     longitude=float(lon_val),
                     altitude_m=_parse_altitude_m(ac.get("alt_baro")),

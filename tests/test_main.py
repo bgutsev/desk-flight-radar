@@ -55,6 +55,7 @@ def test_aircraft_non_mock_parses_adsb_fi_response() -> None:
     fake_ac = {
         "hex": "ab1234",
         "flight": "TST001 ",
+        "t": "A332",
         "lat": 42.6977,
         "lon": 23.3219,
         "alt_baro": 13123,  # feet → 13123 * 0.3048 ≈ 4000 m
@@ -77,6 +78,21 @@ def test_aircraft_non_mock_parses_adsb_fi_response() -> None:
     ac = data["aircraft"][0]
     assert ac["icao24"] == "ab1234"
     assert ac["callsign"] == "TST001"
+    assert ac["type"] == "A332"
     assert ac["altitude_m"] == pytest.approx(13123 * 0.3048, rel=1e-3)
     assert ac["velocity_kmh"] == pytest.approx(216 * 1.852, rel=1e-3)
     assert ac["classification"] in ALLOWED_CLASSIFICATIONS
+
+
+def test_root_serves_radar_ui() -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "<canvas" in response.text
+    assert "radar.js" in response.text
+
+
+def test_static_assets_served() -> None:
+    for path in ("/style.css", "/radar.js", "/radar-frame.png"):
+        response = client.get(path)
+        assert response.status_code == 200, path

@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Source design images (large originals; static/radar-frame.png is the shipped asset)
+/Gemini_Generated_Image_*.png
+/ChatGPT Image*.png
+static/Gemini_Generated_Image_*.png

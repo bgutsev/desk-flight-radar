@@ -6,6 +6,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 
 from app.classifier import classify
 from app.clients.enrichment import get_enrichment_client
@@ -64,3 +65,8 @@ def get_aircraft(
         "mock": mock,
         "aircraft": aircraft,
     }
+
+
+# Mounted last so the API routes above take precedence. ``html=True`` serves
+# static/index.html at ``/`` and other assets (radar-frame.png, css, js) by path.
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
