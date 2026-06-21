@@ -17,7 +17,7 @@ Classification = Literal["arriving", "departing", "cruising"]
 
 # Above this altitude an aircraft is considered en-route rather than
 # arriving/departing the area of interest.
-CRUISE_ALTITUDE_M = 11000.0
+CRUISE_ALTITUDE_M = 8000.0
 
 # A relative bearing whose magnitude is below this points "toward" the center.
 APPROACH_HALF_ANGLE_DEG = 90.0

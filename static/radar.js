@@ -54,8 +54,9 @@ const alertsEl = document.getElementById("alerts");
 
 // ----- State -----
 const state = {
-  center: { lat: 42.6894, lon: 23.4025 },
-  radius: 20,
+  // Sofia Airport (LBSF / SOF).
+  center: { lat: 42.6967, lon: 23.4114 },
+  radius: 25,
 };
 
 // Mock mode is a sticky user preference.
@@ -73,7 +74,18 @@ let size = 0; // CSS pixel size of the square canvas
 let sweepAngle = 0;
 let lastFrame = performance.now();
 let noticeTimer = null;
+
+// Exactly one polling loop. Stored globally so it can be strictly destroyed
+// before a new one starts (Update / Mock toggle / Enter) — no interval leak.
 let intervalId = null;
+// Drop overlapping ticks: never run a second fetch while one is in flight.
+let fetchInFlight = false;
+// Monotonic id so a slow/stale response is discarded — only the most recent
+// request is ever applied to the UI.
+let requestSeq = 0;
+
+// Cached flight routes by callsign: object = known, null = unknown/failed.
+const routeCache = new Map();
 
 // Aircraft already seen on radar (icao24), to detect newcomers. `firstLoad`
 // suppresses an alert burst for the initial fleet (and after a mode switch).
@@ -142,6 +154,8 @@ async function fetchData() {
     return; // invalid input: do nothing, keep showing the last data
   }
 
+  const myReq = ++requestSeq;
+
   const params = new URLSearchParams({
     lat: lat,
     lon: lon,
@@ -152,10 +166,13 @@ async function fetchData() {
   try {
     const resp = await fetch(`/aircraft?${params.toString()}`);
     if (!resp.ok) {
-      setWarning(true, "SERVER ERROR"); // e.g. 429 / 502 — keep last data
+      setWarning(true, "SERVER ERROR"); // keep last data
       return;
     }
     const data = await resp.json();
+
+    // Apply only the most recent request; ignore a stale/late response.
+    if (myReq !== requestSeq) return;
 
     state.center = data.center;
     state.radius = data.radius_km;
@@ -189,15 +206,10 @@ async function fetchData() {
       `${list.length} aircraft · ` +
       `${data.mock ? "MOCK" : "LIVE"} · updated ${new Date().toLocaleTimeString()}`;
 
-    // Alert on aircraft newly caught as arriving/departing (skip first load).
+    // Alert on any aircraft newly caught by the radar (skip the first load).
     if (!firstLoad) {
       for (const ac of list) {
-        if (
-          !seenIds.has(ac.icao24) &&
-          (ac.classification === "arriving" || ac.classification === "departing")
-        ) {
-          spawnPlaneAlert(ac);
-        }
+        if (!seenIds.has(ac.icao24)) spawnPlaneAlert(ac);
       }
     }
     seenIds = new Set(list.map((ac) => ac.icao24));
@@ -224,11 +236,16 @@ function spawnPlaneAlert(ac) {
     <div class="info">
       <div class="title">${name} <span class="cls">${ac.classification}</span></div>
       <div class="sub">${sub}</div>
+      <div class="route"></div>
       <div class="tag">NEW CONTACT</div>
     </div>`;
   alertsEl.appendChild(el);
 
   loadPlanePhoto(ac, el.querySelector(".photo"));
+  fetchRoute(ac.callsign).then((route) => {
+    const r = el.querySelector(".route");
+    if (route && r) r.textContent = `✈ ${route.from} → ${route.to}`;
+  });
 
   // Auto-remove after one minute.
   setTimeout(() => el.remove(), 60000);
@@ -256,11 +273,64 @@ async function loadPlanePhoto(ac, img) {
   }
 }
 
-// Force an immediate fetch and restart the background interval from now.
+// One fetch at a time — a tick that lands while a request is still running is
+// dropped, so requests never pile up into concurrent calls.
+async function runFetch() {
+  if (fetchInFlight) return;
+  fetchInFlight = true;
+  try {
+    await fetchData();
+  } finally {
+    fetchInFlight = false;
+  }
+}
+
+// (Re)start the single polling loop, strictly destroying any previous one first.
+function startPolling() {
+  clearInterval(intervalId);
+  intervalId = setInterval(runFetch, FETCH_INTERVAL_MS);
+}
+
+// Force an immediate fetch and restart the loop (Enter, Update, or mode switch).
+// Bumping requestSeq invalidates any in-flight response so only this newest
+// request is shown.
 function triggerUpdate() {
-  if (intervalId) clearInterval(intervalId);
-  fetchData();
-  intervalId = setInterval(fetchData, FETCH_INTERVAL_MS);
+  requestSeq++;
+  clearInterval(intervalId); // destroy the old loop before starting a new one
+  runFetch(); // fetch immediately, don't wait for the interval
+  startPolling();
+}
+
+// ----- Flight route (from → to) via adsbdb, cached by callsign -----
+function airportLabel(ap) {
+  const place =
+    ap.municipality || ap.name || ap.iata_code || ap.icao_code || ap.country_iso_name;
+  const code = ap.iata_code || ap.icao_code;
+  return code && place && place !== code ? `${place} (${code})` : place || "?";
+}
+
+async function fetchRoute(callsign) {
+  if (!callsign) return null;
+  if (routeCache.has(callsign)) return routeCache.get(callsign);
+  routeCache.set(callsign, null); // reserve to avoid duplicate lookups
+  try {
+    const resp = await fetch(
+      `https://api.adsbdb.com/v0/callsign/${encodeURIComponent(callsign)}`,
+    );
+    if (resp.ok) {
+      const d = await resp.json();
+      const fr = d.response && d.response.flightroute;
+      if (fr && fr.origin && fr.destination) {
+        routeCache.set(callsign, {
+          from: airportLabel(fr.origin),
+          to: airportLabel(fr.destination),
+        });
+      }
+    }
+  } catch (err) {
+    /* leave as null (unknown) */
+  }
+  return routeCache.get(callsign);
 }
 
 function maybeNotifyNearby() {
@@ -294,10 +364,18 @@ function renderCards() {
     const type = ac.type ? `<span class="type">${ac.type}</span>` : "";
     const alt = `<span class="alt">${Math.round(ac.altitude_m)} m</span>`;
 
+    // Route appears on a later render once the lookup resolves and is cached.
+    const route = routeCache.get(ac.callsign);
+    if (route === undefined && ac.callsign) fetchRoute(ac.callsign);
+    const routeHtml = route
+      ? `<div class="route">✈ ${route.from} → ${route.to}</div>`
+      : "";
+
     card.innerHTML = `
       <span class="callsign">${callsign}</span>
       <span class="badge">${ac.classification}</span>
       <div>${type} ${alt}</div>
+      ${routeHtml}
       <div class="meta">
         ${ac._dist.toFixed(1)} km · brg ${Math.round((ac._bearing + 360) % 360)}°
         · hdg ${Math.round(ac.heading_deg)}°

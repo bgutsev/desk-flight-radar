@@ -10,14 +10,21 @@ Defines the :class:`FlightSource` protocol plus two implementations:
 
 from __future__ import annotations
 
+import logging
 from typing import Protocol, TypedDict, runtime_checkable
 
 import httpx
 
 from app.config import Settings, get_settings
 
+logger = logging.getLogger(__name__)
+
 _KM_PER_NM = 1.852
 _FT_PER_M = 0.3048
+
+# Last successful adsb.fi result per query signature, used as a fallback when
+# the upstream API errors or times out. Keyed by (lat, lon, radius_km).
+_last_success: dict[tuple[float, float, float], list["Aircraft"]] = {}
 
 
 class Aircraft(TypedDict):
@@ -95,29 +102,49 @@ class AdsbFiFlightSource:
     def get_states(self, lat: float, lon: float, radius_km: float) -> list[Aircraft]:
         dist_nm = radius_km / _KM_PER_NM
         url = f"{self._settings.adsb_fi_base_url}/lat/{lat}/lon/{lon}/dist/{dist_nm}"
+        key = (round(lat, 4), round(lon, 4), round(radius_km, 1))
 
-        resp = httpx.get(url, timeout=self._settings.request_timeout_s)
-        resp.raise_for_status()
-
-        results: list[Aircraft] = []
-        for ac in resp.json().get("aircraft") or []:
-            lat_val = ac.get("lat")
-            lon_val = ac.get("lon")
-            if lat_val is None or lon_val is None:
-                continue
-            results.append(
-                Aircraft(
-                    icao24=ac.get("hex") or "",
-                    callsign=(ac.get("flight") or "").strip(),
-                    type=(ac.get("t") or "").strip(),
-                    latitude=float(lat_val),
-                    longitude=float(lon_val),
-                    altitude_m=_parse_altitude_m(ac.get("alt_baro")),
-                    velocity_kmh=float(ac.get("gs") or 0.0) * _KM_PER_NM,
-                    heading_deg=float(ac.get("track") or 0.0),
-                )
+        try:
+            resp = httpx.get(url, timeout=self._settings.request_timeout_s)
+            resp.raise_for_status()
+            results = _parse_states(resp.json())
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            # Never surface upstream failures (502/429/timeouts) to the client —
+            # serve the last good data for this query, or an empty list.
+            cached = _last_success.get(key, [])
+            logger.warning(
+                "adsb.fi request failed (%s); serving %s",
+                exc,
+                f"{len(cached)} cached aircraft" if cached else "empty list",
             )
+            return cached
+
+        _last_success[key] = results
         return results
+
+
+def _parse_states(payload: object) -> list[Aircraft]:
+    """Map an adsb.fi JSON payload into the normalised Aircraft list."""
+    results: list[Aircraft] = []
+    aircraft = payload.get("aircraft") if isinstance(payload, dict) else None
+    for ac in aircraft or []:
+        lat_val = ac.get("lat")
+        lon_val = ac.get("lon")
+        if lat_val is None or lon_val is None:
+            continue
+        results.append(
+            Aircraft(
+                icao24=ac.get("hex") or "",
+                callsign=(ac.get("flight") or "").strip(),
+                type=(ac.get("t") or "").strip(),
+                latitude=float(lat_val),
+                longitude=float(lon_val),
+                altitude_m=_parse_altitude_m(ac.get("alt_baro")),
+                velocity_kmh=float(ac.get("gs") or 0.0) * _KM_PER_NM,
+                heading_deg=float(ac.get("track") or 0.0),
+            )
+        )
+    return results
 
 
 def get_flight_source(mock: bool) -> FlightSource:

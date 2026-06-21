@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 
 from app.classifier import classify
@@ -33,18 +32,9 @@ def get_aircraft(
     flight_source = get_flight_source(mock)
     enrichment = get_enrichment_client(mock)
 
-    try:
-        states = flight_source.get_states(lat, lon, radius_km)
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Flight data source returned {exc.response.status_code}",
-        ) from exc
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not reach flight data source: {exc}",
-        ) from exc
+    # The flight source handles upstream failures internally (serving cached or
+    # empty data), so this never raises on a bad upstream response.
+    states = flight_source.get_states(lat, lon, radius_km)
 
     aircraft: list[dict[str, object]] = []
     for state in states:

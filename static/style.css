@@ -403,10 +403,21 @@ h1 {
   color: #6ea0ff;
 }
 
+.card .route {
+  grid-column: 1 / -1;
+  color: #9ad7c2;
+  font-size: 12px;
+}
+
 .card .meta {
   grid-column: 1 / -1;
   color: var(--green-dim);
   font-size: 12px;
+}
+
+.plane-alert .route {
+  font-size: 12px;
+  color: #9ad7c2;
 }
 
 .cards:empty::after {
