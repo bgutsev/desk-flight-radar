@@ -208,6 +208,19 @@ h1 {
   color: var(--green);
 }
 
+.sound-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  vertical-align: middle;
+  color: #ffffff;
+  transition: color 0.15s ease;
+}
+
+.sound-icon.muted {
+  color: #6b7280;
+}
+
 .switch {
   position: relative;
   width: 42px;
@@ -233,21 +246,30 @@ h1 {
     background 0.15s ease;
 }
 
-.switch.mock-on {
-  background: #5a3d00;
-  border-color: var(--amber);
+/* Both toggles: OFF state (knob left) — dimmed amber */
+#mock-toggle,
+#sound-toggle {
+  background: #1a0e00;
+  border-color: #7a5000;
 }
 
-.switch.mock-on .knob {
-  transform: translateX(20px);
-  background: var(--amber);
-}
-
-/* Sound toggle: dim knob on the left when off, green on the right when on. */
+#mock-toggle .knob,
 #sound-toggle .knob {
-  background: #2a4a38;
+  background: #7a5000;
 }
 
+/* Live toggle ON (right) — green */
+#mock-toggle.live-on {
+  background: #0a2818;
+  border-color: var(--green);
+}
+
+#mock-toggle.live-on .knob {
+  transform: translateX(20px);
+  background: var(--green);
+}
+
+/* Sound toggle ON (right) — green */
 #sound-toggle.sound-on {
   background: #14402a;
   border-color: var(--green);
@@ -447,6 +469,123 @@ h1 {
   content: "No aircraft in range.";
   color: var(--green-dim);
   font-size: 15px;
+}
+
+/* ----- Notification permission modal ----- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal {
+  background: #080e0a;
+  border: 2px solid var(--green-dim);
+  outline: 1px solid #0d1f14;
+  box-shadow:
+    0 0 0 4px #040804,
+    0 0 40px 4px rgba(0, 255, 102, 0.12),
+    inset 0 0 60px rgba(0, 0, 0, 0.6);
+  padding: 36px 40px 32px;
+  width: 420px;
+  max-width: 92vw;
+  text-align: center;
+}
+
+.modal-scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 3px,
+    rgba(0, 0, 0, 0.18) 3px,
+    rgba(0, 0, 0, 0.18) 4px
+  );
+  pointer-events: none;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.modal-header-line {
+  flex: 1;
+  height: 1px;
+  background: var(--green-dim);
+  opacity: 0.5;
+}
+
+.modal-title {
+  color: var(--green);
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 4px;
+  text-shadow: 0 0 10px rgba(0, 255, 102, 0.6);
+  white-space: nowrap;
+}
+
+.modal-body {
+  color: #b8d4c4;
+  font-size: 15px;
+  line-height: 1.7;
+  margin: 22px 0 30px;
+}
+
+.modal-body strong {
+  color: var(--green);
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.modal-btn {
+  width: 110px;
+  padding: 11px 0;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  border: 2px solid;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+
+.modal-btn-yes {
+  background: #042b10;
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.modal-btn-yes:hover {
+  background: #073d18;
+  box-shadow: 0 0 14px rgba(0, 255, 102, 0.45);
+}
+
+.modal-btn-no {
+  background: #1f1400;
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.modal-btn-no:hover {
+  background: #2b1c00;
+  box-shadow: 0 0 14px rgba(255, 179, 0, 0.4);
 }
 
 /* Small screens: stack vertically and restore natural scrolling */

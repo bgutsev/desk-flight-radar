@@ -10,6 +10,23 @@
     <script src="/radar.js" defer></script>
   </head>
   <body>
+    <!-- Notification permission modal — shown on every page load -->
+    <div id="alert-modal" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-scanlines"></div>
+        <div class="modal-header">
+          <span class="modal-header-line"></span>
+          <span class="modal-title">&#9670;&nbsp;RADAR ALERTS&nbsp;&#9670;</span>
+          <span class="modal-header-line"></span>
+        </div>
+        <p class="modal-body">Enable <strong>sound notifications</strong> for<br>landing and taking-off aircraft?</p>
+        <div class="modal-buttons">
+          <button id="modal-enable" class="modal-btn modal-btn-yes">YES</button>
+          <button id="modal-dismiss" class="modal-btn modal-btn-no">NO</button>
+        </div>
+      </div>
+    </div>
+
     <main>
       <!-- LEFT: radar device with PPI canvas overlaid on the round screen -->
       <section class="radar-side">
@@ -59,7 +76,7 @@
               </button>
             </div>
             <div class="switch-group sound-group">
-              <span class="switch-label" id="sound-label">NOTIFICATION ON</span>
+              <span class="switch-label" id="sound-label">ALERTS</span><span id="sound-icon" class="sound-icon"></span>
               <button
                 type="button"
                 id="sound-toggle"
