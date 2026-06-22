@@ -14,34 +14,35 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
   background: var(--bg);
   color: var(--green);
   font-family: "Courier New", ui-monospace, monospace;
   letter-spacing: 0.5px;
+  overflow: hidden;
 }
 
+/* Two-pane: radar fixed left, panel scrolls right */
 main {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start; /* keep the radar pinned to the top as the list grows */
-  min-height: 100vh;
+  flex-wrap: nowrap;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ---------- LEFT: radar device ---------- */
 .radar-side {
-  flex: 1 1 600px;
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 24px 16px;
-  position: sticky; /* stays in view while the card list scrolls */
-  top: 0;
+  overflow: hidden;
 }
 
+/* 25% reduction from 1064: 1064 * 0.75 = 798 */
 .radar-stage {
   position: relative;
-  width: min(760px, 92vw);
+  width: min(798px, 92vw);
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
 }
@@ -54,20 +55,20 @@ main {
   pointer-events: none;
 }
 
-/* Overlaid on the round screen. Percentages of the 2048px source so the
-   canvas stays aligned at any stage size: screen circle is centred at
-   (49.76%, 48.24%) with a diameter of 38.96%. */
+/* Canvas overlay on the round screen.
+   Measured from the 1449x1449 source: centre at (46.58%, 44.89%), diameter 56.69%. */
 #ppi {
   position: absolute;
-  left: 30.27%;
-  top: 28.76%;
-  width: 38.96%;
-  height: 38.96%;
+  left: 19.56%;
+  top: 17.50%;
+  width: 56.06%;
+  height: 56.06%;
   border-radius: 50%;
   overflow: hidden;
+  cursor: crosshair;
 }
 
-/* ---------- RIGHT: panel ---------- */
+/* ---------- RIGHT: panel (independent scroll) ---------- */
 .panel {
   flex: 1 1 420px;
   background: var(--panel-bg);
@@ -76,9 +77,11 @@ main {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: 100vh;
+  overflow-y: auto;
 }
 
-/* Header row: title with the data-link status indicator beside it. */
+/* Header row: title + data-link indicator */
 .panel-header {
   display: flex;
   align-items: center;
@@ -87,14 +90,13 @@ main {
 
 h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 26px;
   letter-spacing: 4px;
   color: var(--green);
   text-shadow: 0 0 8px rgba(0, 255, 102, 0.5);
 }
 
-/* Data-link status: dim when healthy, blinking red (with a message) on a
-   failed/empty fetch. Sits immediately to the right of the title. */
+/* Data-link status dot — dim when healthy, blinking red on error */
 #data-status {
   display: flex;
   align-items: center;
@@ -112,7 +114,7 @@ h1 {
 #data-status .msg {
   display: none;
   color: #ff6b6b;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: bold;
   letter-spacing: 1px;
   white-space: nowrap;
@@ -135,27 +137,6 @@ h1 {
   }
 }
 
-/* Notification bar */
-.notice {
-  padding: 10px 14px;
-  border: 1px solid var(--green);
-  border-radius: 4px;
-  background: rgba(0, 255, 102, 0.08);
-  color: var(--green);
-  font-weight: bold;
-  transition: opacity 0.4s ease;
-}
-
-.notice.error {
-  border-color: #ff4d4d;
-  background: rgba(255, 77, 77, 0.1);
-  color: #ff6b6b;
-}
-
-.notice.fade {
-  opacity: 0;
-}
-
 /* Controls */
 .controls {
   display: grid;
@@ -168,7 +149,7 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--green-dim);
   text-transform: uppercase;
 }
@@ -179,12 +160,10 @@ h1 {
   color: var(--green);
   padding: 8px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 16px;
   border-radius: 3px;
 }
 
-/* Compact Update button: sits where the old mode button was, only a little
-   bigger than its text. */
 .controls #update-btn {
   align-self: end;
   justify-self: start;
@@ -193,7 +172,7 @@ h1 {
   border: none;
   padding: 7px 14px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: bold;
   letter-spacing: 1px;
   cursor: pointer;
@@ -204,16 +183,26 @@ h1 {
   background: #4dff96;
 }
 
-/* Small live/mock toggle switch on its own row. */
 .mock-switch {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.switch-group {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
+/* Sound toggle sits a fixed 50px to the right of the live/mock group. */
+.sound-group {
+  margin-left: 50px;
+}
+
 .switch-label {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: bold;
   letter-spacing: 1px;
   color: var(--green);
@@ -254,19 +243,32 @@ h1 {
   background: var(--amber);
 }
 
+/* Sound toggle: dim knob on the left when off, green on the right when on. */
+#sound-toggle .knob {
+  background: #2a4a38;
+}
+
+#sound-toggle.sound-on {
+  background: #14402a;
+  border-color: var(--green);
+}
+
+#sound-toggle.sound-on .knob {
+  transform: translateX(20px);
+  background: var(--green);
+}
+
 .status {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--green-dim);
   min-height: 16px;
 }
 
-/* Aircraft cards */
+/* Aircraft cards — no max-height; the panel itself scrolls */
 .cards {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: auto;
-  max-height: calc(100vh - 300px);
 }
 
 .card {
@@ -278,6 +280,8 @@ h1 {
   display: flex;
   gap: 12px;
   align-items: flex-start;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
 }
 
 .card.arriving {
@@ -290,10 +294,27 @@ h1 {
   border-left-color: #2b6cff;
 }
 
-/* Photo to the left of the flight data. */
+/* Selection: bolder frame on all sides */
+.card.selected {
+  border-width: 2px;
+  border-left-width: 4px;
+  box-shadow: 0 0 12px rgba(0, 255, 102, 0.2);
+}
+.card.arriving.selected {
+  border-color: var(--green);
+}
+.card.departing.selected {
+  border-color: var(--amber);
+}
+.card.cruising.selected {
+  border-color: #2b6cff;
+  box-shadow: 0 0 12px rgba(43, 108, 255, 0.25);
+}
+
+/* Photo */
 .card-photo {
-  width: 120px;
-  height: 80px;
+  width: 150px;
+  height: 100px;
   object-fit: cover;
   border-radius: 3px;
   background: #0a0f0c;
@@ -327,24 +348,25 @@ h1 {
 }
 
 .card .callsign {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: bold;
   color: #ffffff;
 }
 
 .card .type {
   color: var(--cyan);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .card .alt {
   color: var(--green);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .card .badge {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 21px;
+  font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 1px;
   padding: 2px 6px;
@@ -361,31 +383,65 @@ h1 {
   color: #6ea0ff;
 }
 
+/* Badge breathes for 2 minutes when the aircraft is newly detected */
+@keyframes breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.85; text-shadow: 0 0 6px currentColor; }
+}
+
+.badge.badge-alert {
+  animation: breathe 2.5s ease-in-out infinite;
+}
+
 .card .route {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
+/* Dim non-selected cards when a filter is active */
+.cards.has-selection .card:not(.selected) {
+  opacity: 0.35;
+  transition: opacity 0.2s ease;
+}
+
 .card .route-line {
   color: #9ad7c2;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .card .meta {
   color: var(--green-dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .cards:empty::after {
   content: "No aircraft in range.";
   color: var(--green-dim);
-  font-size: 13px;
+  font-size: 15px;
 }
 
-@media (max-width: 1040px) {
+/* Small screens: stack vertically and restore natural scrolling */
+@media (max-width: 1200px) {
+  body {
+    overflow: auto;
+  }
+  main {
+    flex-wrap: wrap;
+    height: auto;
+    overflow: visible;
+  }
+  .radar-side {
+    overflow-y: visible;
+  }
   .panel {
+    height: auto;
+    overflow-y: visible;
     border-left: none;
     border-top: 1px solid #16241c;
+  }
+  .cards {
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
   }
 }

@@ -13,14 +13,18 @@ const DEFAULT_CENTER = {
 const DEFAULT_RADIUS = CONFIG.DEFAULT_RADIUS_KM ?? 25;
 
 const TAU = Math.PI * 2;
-// A blip lit by the sweep fades over exactly one rotation, so it is nearly
-// gone by the time the sweep comes back around to it.
 const FADE_SECONDS = TAU / SWEEP_SPEED;
 const COLORS = {
   arriving: "#00ff66",
   departing: "#ffb300",
   cruising: "#2b6cff",
 };
+
+// Card notification visible for 2 minutes after shown.
+const CARD_NOTICE_MS = 2 * 60 * 1000;
+
+// A grounded (0 m) aircraft stays visible only this long after it lands.
+const LANDED_GRACE_MS = 2 * 60 * 1000;
 
 // ----- Geo helpers (mirror app/utils/geo.py) -----
 const R_EARTH_KM = 6371.0088;
@@ -50,13 +54,14 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
 const canvas = document.getElementById("ppi");
 const ctx = canvas.getContext("2d");
 const form = document.getElementById("controls");
-const noticeEl = document.getElementById("notice");
 const statusEl = document.getElementById("status-line");
 const cardsEl = document.getElementById("cards");
 const dataStatusEl = document.getElementById("data-status");
 const dataStatusMsg = document.getElementById("data-status-msg");
 const mockToggle = document.getElementById("mock-toggle");
 const mockLabel = document.getElementById("mock-label");
+const soundToggle = document.getElementById("sound-toggle");
+const soundLabel = document.getElementById("sound-label");
 const latInput = document.getElementById("lat");
 const lonInput = document.getElementById("lon");
 const radiusInput = document.getElementById("radius");
@@ -67,37 +72,38 @@ const state = {
   radius: DEFAULT_RADIUS,
 };
 
-// Mock mode is a sticky user preference.
 let mockMode = localStorage.getItem("mockMode") === "true";
+// Sound notifications are on by default; sticky user preference.
+let soundEnabled = localStorage.getItem("soundEnabled") !== "false";
 
-// `incoming` holds the freshest fetched data (buffered, no visual effect on its
-// own). `rendered` holds what is actually drawn: each blip is committed from
-// `incoming` — its position frozen and intensity flashed to 1 — only at the
-// instant the sweep line passes its bearing. `lastList` feeds the side panel.
-const incoming = new Map(); // icao24 -> aircraft (with _dist/_bearing/_frac)
+// `incoming`: freshest fetched data buffered until the sweep crosses each blip.
+// `rendered`: what is actually on screen, with per-blip intensity.
+const incoming = new Map(); // icao24 -> aircraft
 const rendered = new Map(); // icao24 -> { ...aircraft, intensity }
 let lastList = [];
 
-// Cached aircraft photos by registration/hex: string = url, null = none.
-const photoCache = new Map();
+const photoCache = new Map(); // key -> url | null
+const blipPositions = new Map(); // icao24 -> {x, y} CSS pixels, for click detection
+const seenAircraft = new Set(); // icao24s already announced since session start
+const cardNotices = new Map(); // icao24 -> { msg, shownAt }
+const prevAlt = new Map(); // icao24 -> altitude_m at previous poll
+const landedAt = new Map(); // icao24 -> timestamp it transitioned airborne -> ground
 
-let size = 0; // CSS pixel size of the square canvas
+let selectedIcao = null; // null = no filter; set = show only this on radar
+
+let size = 0;
 let sweepAngle = 0;
 let lastFrame = performance.now();
-let noticeTimer = null;
 
-// Exactly one polling loop. Stored globally so it can be strictly destroyed
-// before a new one starts (Update / Mock toggle / Enter) — no interval leak.
 let intervalId = null;
-// Drop overlapping ticks: never run a second fetch while one is in flight.
 let fetchInFlight = false;
-// Monotonic id so a slow/stale response is discarded — only the most recent
-// request is ever applied to the UI.
 let requestSeq = 0;
+
+// Lazy AudioContext — created on first alert (browser autoplay policy).
+let audioCtx = null;
 
 const normAngle = (a) => ((a % TAU) + TAU) % TAU;
 
-// Did the sweep, moving from `prev` to `cur`, pass angle `t` this frame?
 function sweepCrossed(prev, cur, t) {
   prev = normAngle(prev);
   cur = normAngle(cur);
@@ -124,7 +130,6 @@ function readInputs() {
   };
 }
 
-// Load saved params on startup; fall back to the defaults only when empty.
 function loadParams() {
   const lat = localStorage.getItem("lat");
   const lon = localStorage.getItem("lon");
@@ -147,38 +152,94 @@ function updateMockButton() {
   mockLabel.textContent = mockMode ? "MOCK" : "LIVE";
 }
 
-// ----- Data-link warning light (with message) -----
+function updateSoundButton() {
+  soundToggle.classList.toggle("sound-on", soundEnabled);
+  soundToggle.setAttribute("aria-checked", String(soundEnabled));
+  soundLabel.textContent = soundEnabled ? "NOTIFICATION ON" : "NOTIFICATION OFF";
+}
+
+// ----- Data-link warning light -----
 function setWarning(on, msg = "") {
   dataStatusEl.classList.toggle("alert", on);
   dataStatusMsg.textContent = on ? msg : "";
 }
 
-// ----- Landing notification (informational, not an error) -----
-function showNotice(message) {
-  noticeEl.textContent = message;
-  noticeEl.classList.remove("fade");
-  noticeEl.hidden = false;
-  if (noticeTimer) clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => {
-    noticeEl.classList.add("fade");
-    setTimeout(() => {
-      noticeEl.hidden = true;
-    }, 400);
-  }, 5000);
+// ----- Audio alerts -----
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  return audioCtx;
 }
 
-// ----- Data loop (fails silently, keeping the last known data) -----
+// Browsers start an AudioContext suspended until the user interacts with the
+// page. Resume it on the first gesture (anywhere) so later alerts can play.
+function unlockAudio() {
+  try {
+    getAudioCtx().resume?.();
+  } catch (e) {
+    /* audio not available */
+  }
+  window.removeEventListener("pointerdown", unlockAudio);
+  window.removeEventListener("keydown", unlockAudio);
+}
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
+
+function playDing(ac, freq, delay) {
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.connect(gain);
+  gain.connect(ac.destination);
+  osc.type = "sine";
+  osc.frequency.value = freq;
+  const t = ac.currentTime + delay;
+  gain.gain.setValueAtTime(0.4, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+  osc.start(t);
+  osc.stop(t + 0.8);
+}
+
+// Ding-ding, then the same pair repeated 2 seconds later.
+function playAlert() {
+  if (!soundEnabled) return;
+  try {
+    const ac = getAudioCtx();
+    playDing(ac, 880, 0);
+    playDing(ac, 1100, 0.35);
+    playDing(ac, 880, 2.35);
+    playDing(ac, 1100, 2.70);
+  } catch (e) {
+    /* audio not available */
+  }
+}
+
+// ----- New-aircraft detection (sound + card notices) -----
+function detectNewAircraft(list) {
+  let hasNew = false;
+  for (const ac of list) {
+    if (!seenAircraft.has(ac.icao24)) {
+      seenAircraft.add(ac.icao24);
+      if (ac.classification === "arriving" || ac.classification === "departing") {
+        cardNotices.set(ac.icao24, {
+          msg: `▶ NEW ${ac.classification.toUpperCase()}`,
+          shownAt: Date.now(),
+        });
+        hasNew = true;
+      }
+    }
+  }
+  if (hasNew) playAlert();
+}
+
+
+// ----- Data loop -----
 async function fetchData() {
   const { lat, lon, radius } = readInputs();
-  if (Number.isNaN(lat) || Number.isNaN(lon) || Number.isNaN(radius)) {
-    return; // invalid input: do nothing, keep showing the last data
-  }
+  if (Number.isNaN(lat) || Number.isNaN(lon) || Number.isNaN(radius)) return;
 
   const myReq = ++requestSeq;
-
   const params = new URLSearchParams({
-    lat: lat,
-    lon: lon,
+    lat,
+    lon,
     radius_km: radius,
     mock: mockMode ? "true" : "false",
   });
@@ -186,38 +247,57 @@ async function fetchData() {
   try {
     const resp = await fetch(`/aircraft?${params.toString()}`);
     if (!resp.ok) {
-      setWarning(true, "SERVER ERROR"); // keep last data
+      setWarning(true, "SERVER ERROR");
       return;
     }
     const data = await resp.json();
 
-    // Apply only the most recent request; ignore a stale/late response.
     if (myReq !== requestSeq) return;
 
     state.center = data.center;
     state.radius = data.radius_km;
 
-    const list = data.aircraft
-      // Drop aircraft with no/zero altitude (on-ground or unknown).
-      .filter((ac) => ac.altitude_m > 0)
-      .map((ac) => {
-        const dist = haversineKm(
-          data.center.lat,
-          data.center.lon,
-          ac.latitude,
-          ac.longitude,
-        );
-        const brg = bearingDeg(
-          data.center.lat,
-          data.center.lon,
-          ac.latitude,
-          ac.longitude,
-        );
-        // _frac freezes the radial position independent of later radius edits.
-        return { ...ac, _dist: dist, _bearing: brg, _frac: dist / data.radius_km };
-      });
+    const now = Date.now();
+    const enriched = data.aircraft.map((ac) => {
+      const dist = haversineKm(
+        data.center.lat,
+        data.center.lon,
+        ac.latitude,
+        ac.longitude,
+      );
+      const brg = bearingDeg(
+        data.center.lat,
+        data.center.lon,
+        ac.latitude,
+        ac.longitude,
+      );
+      return { ...ac, _dist: dist, _bearing: brg, _frac: dist / data.radius_km };
+    });
 
-    // Buffer for the radar; committed to screen as the sweep passes each blip.
+    // Track landings: an aircraft we previously saw airborne and now see at 0 m
+    // just landed. Keep only currently-present aircraft in the tracking maps so
+    // a craft that disappears and reappears at 0 m isn't mistaken for a landing.
+    const present = new Set();
+    for (const ac of enriched) {
+      present.add(ac.icao24);
+      const onGround = ac.altitude_m <= 0;
+      if (onGround) {
+        if (prevAlt.get(ac.icao24) > 0) landedAt.set(ac.icao24, now);
+      } else {
+        landedAt.delete(ac.icao24); // airborne again (or still flying)
+      }
+      prevAlt.set(ac.icao24, ac.altitude_m);
+    }
+    for (const id of prevAlt.keys()) if (!present.has(id)) prevAlt.delete(id);
+    for (const id of landedAt.keys()) if (!present.has(id)) landedAt.delete(id);
+
+    // Show airborne aircraft, plus grounded ones only within the landing grace.
+    const list = enriched.filter((ac) => {
+      if (ac.altitude_m > 0) return true;
+      const t = landedAt.get(ac.icao24);
+      return t !== undefined && now - t < LANDED_GRACE_MS;
+    });
+
     incoming.clear();
     for (const ac of list) incoming.set(ac.icao24, ac);
 
@@ -226,18 +306,15 @@ async function fetchData() {
       `${list.length} aircraft · ` +
       `${data.mock ? "MOCK" : "LIVE"} · updated ${new Date().toLocaleTimeString()}`;
 
+    detectNewAircraft(list);
     renderCards();
-    maybeNotifyNearby();
 
-    // Healthy only when we actually have data; blink on empty results.
     setWarning(list.length === 0, "NO DATA");
   } catch (err) {
-    setWarning(true, "NO CONNECTION"); // network error: keep last data
+    setWarning(true, "NO CONNECTION");
   }
 }
 
-// One fetch at a time — a tick that lands while a request is still running is
-// dropped, so requests never pile up into concurrent calls.
 async function runFetch() {
   if (fetchInFlight) return;
   fetchInFlight = true;
@@ -248,20 +325,16 @@ async function runFetch() {
   }
 }
 
-// (Re)start the single polling loop, strictly destroying any previous one first.
 function startPolling() {
   clearInterval(intervalId);
   intervalId = setInterval(runFetch, FETCH_INTERVAL_MS);
 }
 
-// Force an immediate fetch and restart the loop (Enter, Update, or mode switch).
-// Bumping requestSeq invalidates any in-flight response so only this newest
-// request is shown.
 function triggerUpdate() {
   persistParams();
   requestSeq++;
-  clearInterval(intervalId); // destroy the old loop before starting a new one
-  runFetch(); // fetch immediately, don't wait for the interval
+  clearInterval(intervalId);
+  runFetch();
   startPolling();
 }
 
@@ -273,7 +346,7 @@ function photoKey(ac) {
 async function fetchPhoto(ac) {
   const key = photoKey(ac);
   if (!key || photoCache.has(key)) return photoCache.get(key);
-  photoCache.set(key, null); // reserve to avoid duplicate lookups
+  photoCache.set(key, null);
   const endpoint = ac.registration
     ? `reg/${encodeURIComponent(ac.registration)}`
     : `hex/${encodeURIComponent(ac.icao24)}`;
@@ -293,7 +366,7 @@ async function fetchPhoto(ac) {
   return photoCache.get(key);
 }
 
-// ----- Route (origin/destination) supplied by the backend -----
+// ----- Route (origin/destination) -----
 function airportText(ap) {
   const place = [ap.country, ap.city, ap.airport].filter(Boolean).join(" / ");
   return ap.code ? `${place} (${ap.code})` : place;
@@ -310,21 +383,14 @@ function routeHtml(ac) {
   return lines ? `<div class="route">${lines}</div>` : "";
 }
 
-function maybeNotifyNearby() {
-  const nearby = lastList
-    .filter((ac) => ac.classification === "arriving")
-    .filter((ac) => ac._dist <= state.radius * NEARBY_FRACTION)
-    .sort((a, b) => a._dist - b._dist);
-  if (nearby.length) {
-    const ac = nearby[0];
-    const name = ac.callsign || ac.icao24;
-    showNotice(`${name} — landing nearby (${ac._dist.toFixed(0)} km)`);
-  }
+// ----- Selection: toggle a single aircraft filter -----
+function selectAircraft(icao) {
+  selectedIcao = selectedIcao === icao ? null : icao;
+  renderCards();
 }
 
-// ----- Aircraft cards (panel updates immediately on fetch) -----
+// ----- Aircraft cards -----
 function renderCards() {
-  // Arriving/departing on top (closest to centre first), then everything else.
   const priority = (c) => (c === "arriving" || c === "departing" ? 0 : 1);
   const sorted = [...lastList].sort((a, b) => {
     const pa = priority(a.classification);
@@ -332,16 +398,21 @@ function renderCards() {
     if (pa !== pb) return pa - pb;
     return a._dist - b._dist;
   });
+
   cardsEl.innerHTML = "";
+  cardsEl.classList.toggle("has-selection", selectedIcao !== null);
+  const now = Date.now();
+
   for (const ac of sorted) {
     const card = document.createElement("div");
-    card.className = `card ${ac.classification}`;
+    const isSelected = selectedIcao === ac.icao24;
+    card.className = `card ${ac.classification}${isSelected ? " selected" : ""}`;
+    card.dataset.icao = ac.icao24;
 
     const callsign = ac.callsign || ac.icao24 || "——";
     const type = ac.type ? `<span class="type">${ac.type}</span>` : "";
     const alt = `<span class="alt">${Math.round(ac.altitude_m)} m</span>`;
 
-    // Photo (cached; the card re-renders with it on a later poll).
     const key = photoKey(ac);
     const url = key ? photoCache.get(key) : null;
     if (url === undefined) fetchPhoto(ac);
@@ -349,12 +420,15 @@ function renderCards() {
       ? `<img class="card-photo" src="${url}" alt="" />`
       : `<div class="card-photo placeholder"></div>`;
 
+    const notice = cardNotices.get(ac.icao24);
+    const alertBadge = notice && now - notice.shownAt < CARD_NOTICE_MS;
+
     card.innerHTML = `
       ${photoHtml}
       <div class="card-body">
         <div class="card-top">
           <span class="callsign">${callsign}</span>
-          <span class="badge">${ac.classification}</span>
+          <span class="badge${alertBadge ? " badge-alert" : ""}">${ac.classification}</span>
         </div>
         <div class="type-alt">${type} ${alt}</div>
         ${routeHtml(ac)}
@@ -364,13 +438,14 @@ function renderCards() {
           · ${Math.round(ac.velocity_kmh)} km/h
         </div>
       </div>`;
+
+    card.addEventListener("click", () => selectAircraft(ac.icao24));
     cardsEl.appendChild(card);
   }
 }
 
 // ----- Render loop -----
 function drawBackground(cx, cy, R) {
-  // Range rings
   ctx.strokeStyle = "rgba(0, 255, 102, 0.35)";
   ctx.lineWidth = 1;
   for (let i = 1; i <= RING_COUNT; i++) {
@@ -379,7 +454,6 @@ function drawBackground(cx, cy, R) {
     ctx.stroke();
   }
 
-  // Crosshairs
   ctx.strokeStyle = "rgba(0, 255, 102, 0.25)";
   ctx.beginPath();
   ctx.moveTo(cx - R, cy);
@@ -388,19 +462,17 @@ function drawBackground(cx, cy, R) {
   ctx.lineTo(cx, cy + R);
   ctx.stroke();
 
-  // Cardinal labels
   ctx.fillStyle = "rgba(0, 255, 102, 0.8)";
-  ctx.font = "bold 11px monospace";
+  ctx.font = "bold 14px monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("N", cx, cy - R + 9);
-  ctx.fillText("S", cx, cy + R - 9);
-  ctx.fillText("E", cx + R - 9, cy);
-  ctx.fillText("W", cx - R + 9, cy);
+  ctx.fillText("N", cx, cy - R + 11);
+  ctx.fillText("S", cx, cy + R - 11);
+  ctx.fillText("E", cx + R - 11, cy);
+  ctx.fillText("W", cx - R + 11, cy);
 
-  // Range label (outer ring distance)
   ctx.fillStyle = "rgba(0, 255, 102, 0.6)";
-  ctx.font = "10px monospace";
+  ctx.font = "13px monospace";
   ctx.textAlign = "left";
   ctx.fillText(`${Math.round(state.radius)} km`, cx + 6, cy - R * 0.5);
 }
@@ -418,7 +490,6 @@ function drawSweep(cx, cy, R) {
     ctx.lineTo(cx + R * Math.sin(a), cy - R * Math.cos(a));
     ctx.stroke();
   }
-  // Bright leading arm
   ctx.strokeStyle = "rgba(150, 255, 190, 0.9)";
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -427,15 +498,11 @@ function drawSweep(cx, cy, R) {
   ctx.stroke();
 }
 
-// Commit buffered aircraft to the screen exactly when the sweep passes their
-// bearing (freezing position + flashing to full intensity); decay the rest.
 function updateRadar(prevAngle, curAngle, dt) {
-  // Fade everything already on screen.
   for (const [id, blip] of rendered) {
     blip.intensity -= dt / FADE_SECONDS;
     if (blip.intensity <= 0) rendered.delete(id);
   }
-  // Light up the blips the sweep just crossed, snapshotting current position.
   for (const [id, ac] of incoming) {
     if (sweepCrossed(prevAngle, curAngle, toRad(ac._bearing))) {
       rendered.set(id, { ...ac, intensity: 1 });
@@ -444,8 +511,11 @@ function updateRadar(prevAngle, curAngle, dt) {
 }
 
 function drawAircraft(cx, cy, R) {
+  blipPositions.clear();
+  const isFiltered = selectedIcao !== null;
+
   for (const blip of rendered.values()) {
-    if (blip._frac > 1) continue; // outside the current ring
+    if (blip._frac > 1) continue;
     const intensity = blip.intensity;
     if (intensity <= 0.03) continue;
 
@@ -453,10 +523,23 @@ function drawAircraft(cx, cy, R) {
     const x = cx + r * Math.sin(toRad(blip._bearing));
     const y = cy - r * Math.cos(toRad(blip._bearing));
     const color = COLORS[blip.classification] || "#00ff66";
+    const isSelected = blip.icao24 === selectedIcao;
+
+    blipPositions.set(blip.icao24, { x, y });
+
+    if (isFiltered && !isSelected) {
+      // Non-selected: dim dot only
+      ctx.globalAlpha = intensity * 0.15;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      continue;
+    }
 
     ctx.globalAlpha = intensity;
 
-    // Soft glow right after a hit
     if (intensity > 0.4) {
       const glow = ctx.createRadialGradient(x, y, 0, x, y, 16);
       glow.addColorStop(0, color);
@@ -470,7 +553,6 @@ function drawAircraft(cx, cy, R) {
       ctx.restore();
     }
 
-    // Oriented triangle + forward direction line
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(toRad(blip.heading_deg));
@@ -489,19 +571,18 @@ function drawAircraft(cx, cy, R) {
     ctx.stroke();
     ctx.restore();
 
-    // Upright label block (fades with the blip)
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.font = "bold 10px monospace";
+    ctx.font = "bold 13px monospace";
     const lx = x + 9;
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(blip.callsign || blip.icao24, lx, y - 9);
+    ctx.fillText(blip.callsign || blip.icao24, lx, y - 10);
     if (blip.type) {
       ctx.fillStyle = "#59d6ff";
       ctx.fillText(blip.type, lx, y + 1);
     }
     ctx.fillStyle = "#00ff66";
-    ctx.fillText(`${Math.round(blip.altitude_m)} m`, lx, y + 11);
+    ctx.fillText(`${Math.round(blip.altitude_m)} m`, lx, y + 12);
 
     ctx.globalAlpha = 1;
   }
@@ -520,13 +601,11 @@ function frame(now) {
   const cy = size / 2;
   const R = size / 2 - 6;
 
-  // Clip everything to the round screen.
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
   ctx.clip();
 
-  // Faint screen glow
   ctx.fillStyle = "rgba(0, 40, 15, 0.35)";
   ctx.fillRect(0, 0, size, size);
 
@@ -538,20 +617,36 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+// ----- Canvas click: select aircraft by clicking its blip -----
+canvas.addEventListener("click", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  let hit = null;
+  let minDist = 24; // CSS pixel click tolerance
+  for (const [icao, pos] of blipPositions) {
+    const dx = mx - pos.x;
+    const dy = my - pos.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < minDist) {
+      minDist = d;
+      hit = icao;
+    }
+  }
+  selectAircraft(hit); // null = deselect
+});
+
 // ----- Wire up -----
-// Enter in any input submits the form; both Enter and Update force an
-// immediate fetch (and persist the params) instead of waiting for the interval.
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   triggerUpdate();
 });
 
-// Persist whenever a field is edited, even without clicking Update.
 for (const input of [latInput, lonInput, radiusInput]) {
   input.addEventListener("change", persistParams);
 }
 
-// Mock/Live toggle: flip mode, remember it, and re-fetch immediately.
 mockToggle.addEventListener("click", () => {
   mockMode = !mockMode;
   localStorage.setItem("mockMode", String(mockMode));
@@ -559,9 +654,17 @@ mockToggle.addEventListener("click", () => {
   triggerUpdate();
 });
 
+// Sound on/off: flip and remember. Turning it on doubles as the user gesture
+// that unlocks audio playback (browser autoplay policy).
+soundToggle.addEventListener("click", () => {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem("soundEnabled", String(soundEnabled));
+  updateSoundButton();
+  if (soundEnabled) getAudioCtx().resume?.();
+});
+
 window.addEventListener("resize", resizeCanvas);
 
-// Startup: load saved params (or defaults) before the first fetch.
 loadParams();
 const initial = readInputs();
 if (!Number.isNaN(initial.lat) && !Number.isNaN(initial.lon)) {
@@ -571,5 +674,6 @@ if (!Number.isNaN(initial.radius)) state.radius = initial.radius;
 
 resizeCanvas();
 updateMockButton();
+updateSoundButton();
 triggerUpdate();
 requestAnimationFrame(frame);

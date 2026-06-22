@@ -14,7 +14,7 @@
       <!-- LEFT: radar device with PPI canvas overlaid on the round screen -->
       <section class="radar-side">
         <div class="radar-stage">
-          <img src="/radar-frame.png" alt="Radar console" />
+          <img src="/radar-frame.png?v=2" alt="Radar console" />
           <canvas id="ppi"></canvas>
         </div>
       </section>
@@ -29,8 +29,6 @@
             <span class="msg" id="data-status-msg"></span>
           </div>
         </div>
-
-        <div id="notice" class="notice" hidden></div>
 
         <form id="controls" class="controls" autocomplete="off">
           <label>
@@ -47,17 +45,32 @@
           </label>
           <button type="submit" id="update-btn">Update</button>
           <div class="mock-switch">
-            <span class="switch-label" id="mock-label">LIVE</span>
-            <button
-              type="button"
-              id="mock-toggle"
-              class="switch"
-              role="switch"
-              aria-checked="false"
-              title="Toggle live / mock data"
-            >
-              <span class="knob"></span>
-            </button>
+            <div class="switch-group">
+              <span class="switch-label" id="mock-label">LIVE</span>
+              <button
+                type="button"
+                id="mock-toggle"
+                class="switch"
+                role="switch"
+                aria-checked="false"
+                title="Toggle live / mock data"
+              >
+                <span class="knob"></span>
+              </button>
+            </div>
+            <div class="switch-group sound-group">
+              <span class="switch-label" id="sound-label">NOTIFICATION ON</span>
+              <button
+                type="button"
+                id="sound-toggle"
+                class="switch sound-on"
+                role="switch"
+                aria-checked="true"
+                title="Toggle notification sound (visual alerts stay on)"
+              >
+                <span class="knob"></span>
+              </button>
+            </div>
           </div>
         </form>
 
