@@ -39,10 +39,12 @@ main {
   overflow: hidden;
 }
 
-/* 25% reduction from 1064: 1064 * 0.75 = 798 */
+/* 25% reduction from 1064: 1064 * 0.75 = 798.
+   Also cap by viewport height (minus the 48px vertical padding) so the
+   square radar fits short screens, e.g. 768px laptops, without overflow. */
 .radar-stage {
   position: relative;
-  width: min(798px, 92vw);
+  width: min(798px, 92vw, calc(100vh - 48px));
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
 }

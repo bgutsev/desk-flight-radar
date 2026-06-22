@@ -52,3 +52,4 @@
 2026-06-22 18:42:10 | Edit         | .gitignore                               | deduplicate change-log entries by skipping repeated file+comment pairs
 2026-06-22 18:46:41 | Edit         | README.md                                | fix README inaccuracies: wrong css filename, missing radar.js, overstated features
 2026-06-22 18:47:54 | Edit         | CLAUDE.md                                | add rule to CLAUDE.md: no project structure section in README
+2026-06-22 19:03:19 | Edit         | static\style.css                         | Cap radar size by viewport height so it fits short (768px) screens
