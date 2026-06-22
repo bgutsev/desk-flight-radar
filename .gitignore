@@ -5,6 +5,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Claude Code session state (ephemeral, not for version control)
+.claude/pending-comment.txt
+.claude/logged-paths.txt
+
 # Source design images (large originals; static/radar-frame.png is the shipped asset)
 /Gemini_Generated_Image_*.png
 /ChatGPT Image*.png

@@ -30,6 +30,18 @@ const LANDED_GRACE_MS = 2 * 60 * 1000;
 // switches — filters out brief altitude blips (e.g. a flare while landing).
 const CLASS_STABLE_MS = 5 * 1000;
 
+// Aircraft within this distance from the center are in the airport zone.
+// They are hidden until confirmed as real aircraft (rising altitude trend),
+// which filters out ground vehicles and permanently parked planes.
+const AIRPORT_RADIUS_KM = 1.0;
+
+// Number of altitude readings to keep per aircraft for trend detection.
+const ALT_HISTORY_SIZE = 3;
+
+// Minimum altitude gain between two consecutive readings (metres) to count
+// as a genuine climb. Filters out barometric noise (~±5 m).
+const ALT_CLIMB_MIN_M = 10.0;
+
 // ----- Geo helpers (mirror app/utils/geo.py) -----
 const R_EARTH_KM = 6371.0088;
 const toRad = (d) => (d * Math.PI) / 180;
@@ -106,6 +118,12 @@ const landedAt = new Map(); // icao24 -> timestamp it transitioned airborne -> g
 // landing isn't shown as "taking off".
 const shownClass = new Map(); // icao24 -> currently displayed classification
 const pendingClass = new Map(); // icao24 -> { cls, since } awaiting confirmation
+
+// Altitude history for trend detection (takeoff confirmation near airport).
+const altHistory = new Map(); // icao24 -> [{alt_m, ts}, ...] last ALT_HISTORY_SIZE entries
+// Aircraft confirmed as real (not ground vehicles): either first seen from
+// outside the airport zone, or showed a sustained climb from within it.
+const confirmedAircraft = new Set();
 
 let selectedIcao = null; // null = no filter; set = show only this on radar
 

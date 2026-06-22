@@ -38,5 +38,15 @@
 2026-06-22 17:29:52 | Edit         | change-log.txt                           | demo: show how /log-intent writes meaningful comments to change-log.txt
 2026-06-22 17:54:50 | Edit         | README.md                                | +70 lines
 2026-06-22 18:01:17 | Edit         | .claude\settings.json                    | +11 lines
-2026-06-22 18:04:19 | Edit         | static\radar.js                          | +0 lines
-2026-06-22 18:04:31 | Edit         | static\radar.js                          | +0 lines · const lx
+2026-06-22 18:04:19 | Edit         | static\radar.js                          | remove bold font-weight from radar canvas text labels
+2026-06-22 18:04:31 | Edit         | static\radar.js                          | remove bold font-weight from radar canvas text labels
+2026-06-22 18:09:19 | Edit         | .claude\log-change.py                    | exclude change-log.txt from self-logging to avoid meta noise
+2026-06-22 18:33:44 | Edit         | static\radar.js                          | add altitude history + proximity gate to filter ground vehicles near airport
+2026-06-22 18:33:53 | Edit         | static\radar.js                          | +6 lines · const prevGround
+2026-06-22 18:38:06 | Edit         | .claude\log-change.py                    | fix log-change to persist intent across edits and drop heuristic fallback
+2026-06-22 18:38:16 | Edit         | .claude\log-change.py                    | fix log-change to persist intent across edits and drop heuristic fallback
+2026-06-22 18:38:28 | Edit         | .claude\log-change.py                    | fix log-change to persist intent across edits and drop heuristic fallback
+2026-06-22 18:38:40 | Edit         | .claude\log-change.py                    | fix log-change to persist intent across edits and drop heuristic fallback
+2026-06-22 18:38:44 | Edit         | .claude\log-change.py                    | fix log-change to persist intent across edits and drop heuristic fallback
+2026-06-22 18:42:03 | Write        | .claude\log-change.py                    | deduplicate change-log entries by skipping repeated file+comment pairs
+2026-06-22 18:42:10 | Edit         | .gitignore                               | deduplicate change-log entries by skipping repeated file+comment pairs

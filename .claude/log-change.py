@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""PostToolUse hook: append a readable line to change-log.txt for each edit.
+"""PostToolUse hook: append a line to change-log.txt for each edit.
 
-Reads the hook payload (JSON) from stdin and records when a file was changed,
-which tool changed it, the file path (relative to repo root), and a short
-comment describing *why* the change was made.
-
-Comment resolution order:
-1. .claude/pending-comment.txt — written by the /log-intent skill before the
-   edit batch starts; consumed (deleted) on first use.
-2. Diff heuristic — line delta + first named entity (def/class/fn/selector)
-   extracted from the new content.
+Reads the hook payload (JSON) from stdin. Only logs if .claude/pending-comment.txt
+exists (written by /log-intent). Each file is logged at most once per intent —
+tracked via .claude/logged-paths.txt (sidecar). When /log-intent writes a new
+intent the sidecar resets automatically, so the next task starts clean.
 
 Failures are swallowed so the hook never blocks an edit.
 """
@@ -19,53 +14,66 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import re
 import sys
 
 # .claude/log-change.py -> repo root is two levels up, regardless of cwd.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_PATH = os.path.join(PROJECT_ROOT, "change-log.txt")
 PENDING_PATH = os.path.join(PROJECT_ROOT, ".claude", "pending-comment.txt")
+SIDECAR_PATH = os.path.join(PROJECT_ROOT, ".claude", "logged-paths.txt")
 
 
 def _pending_comment() -> str:
-    """Return and delete the pending intent comment, or empty string."""
+    """Return the current intent comment, or empty string if none."""
     try:
         if os.path.exists(PENDING_PATH):
             with open(PENDING_PATH, encoding="utf-8") as fh:
-                text = fh.read().strip()
-            os.remove(PENDING_PATH)
-            return text
+                return fh.read().strip()
     except OSError:
         pass
     return ""
 
 
-def _heuristic_comment(tool: str, tool_input: dict) -> str:
-    """Generate a basic comment from the diff when no intent was pre-logged."""
-    if tool == "Write":
-        content = tool_input.get("content") or ""
-        n = sum(1 for ln in content.splitlines() if ln.strip())
-        return f"new file ({n} lines)"
+def _already_logged(path: str, comment: str) -> bool:
+    """True if this file was already logged under the current intent.
 
-    old = tool_input.get("old_string") or ""
-    new = tool_input.get("new_string") or ""
-    delta = len(new.splitlines()) - len(old.splitlines())
-    sign = f"+{delta}" if delta >= 0 else str(delta)
+    The sidecar stores the intent on line 1 and logged paths on subsequent
+    lines. If the stored intent differs from the current one, the sidecar is
+    stale (new task started) and is treated as empty.
+    """
+    try:
+        if not os.path.exists(SIDECAR_PATH):
+            return False
+        with open(SIDECAR_PATH, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        if not lines or lines[0] != comment:
+            return False  # different intent — sidecar belongs to previous task
+        return path in lines[1:]
+    except OSError:
+        return False
 
-    # Try to name the first changed entity.
-    for pattern, label in [
-        (r"\bdef\s+(\w+)", "def"),
-        (r"\bclass\s+(\w+)", "class"),
-        (r"\bfunction\s+(\w+)", "fn"),
-        (r"\bconst\s+(\w+)\s*=", "const"),
-        (r"([.#][\w-]+)\s*\{", "selector"),
-    ]:
-        m = re.search(pattern, new)
-        if m:
-            return f"{sign} lines · {label} {m.group(1)}"
 
-    return f"{sign} lines"
+def _mark_logged(path: str, comment: str) -> None:
+    """Record that this file has been logged under the current intent."""
+    try:
+        # If sidecar is stale (different intent), overwrite it fresh.
+        existing_comment = ""
+        existing_paths: list[str] = []
+        if os.path.exists(SIDECAR_PATH):
+            with open(SIDECAR_PATH, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            if lines and lines[0] == comment:
+                existing_comment = lines[0]
+                existing_paths = lines[1:]
+
+        if existing_comment != comment:
+            existing_paths = []
+
+        existing_paths.append(path)
+        with open(SIDECAR_PATH, "w", encoding="utf-8") as fh:
+            fh.write(comment + "\n" + "\n".join(existing_paths) + "\n")
+    except OSError:
+        pass
 
 
 def main() -> None:
@@ -82,7 +90,18 @@ def main() -> None:
     except ValueError:
         pass  # different drive on Windows — keep the absolute path
 
-    comment = _pending_comment() or _heuristic_comment(tool, tool_input)
+    if os.path.abspath(path) == os.path.abspath(LOG_PATH):
+        return
+
+    comment = _pending_comment()
+    if not comment:
+        return  # no intent registered — skip
+
+    if _already_logged(path, comment):
+        return  # already logged this file for this task
+
+    _mark_logged(path, comment)
+
     timestamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"{timestamp} | {tool:<12} | {path:<40} | {comment}\n"
     try:
