@@ -581,7 +581,7 @@ function drawBackground(cx, cy, R) {
   ctx.stroke();
 
   ctx.fillStyle = "rgba(0, 255, 102, 0.8)";
-  ctx.font = "bold 14px monospace";
+  ctx.font = "14px monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("N", cx, cy - R + 11);
@@ -691,7 +691,7 @@ function drawAircraft(cx, cy, R) {
 
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.font = "bold 13px monospace";
+    ctx.font = "13px monospace";
     const lx = x + 9;
     ctx.fillStyle = "#ffffff";
     ctx.fillText(blip.callsign || blip.icao24, lx, y - 10);
