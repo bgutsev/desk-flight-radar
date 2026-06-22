@@ -46,6 +46,10 @@ class Settings:
     # Fallback route lookup when hexdb has no route (adsbdb.com).
     adsbdb_base_url: str = "https://api.adsbdb.com/v0"
 
+    # Elevation of the radar center airport in metres (AMSL).
+    # Sofia Airport (LBSF) default; override with CENTER_ALT_M env var.
+    center_alt_m: float = 531.0
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -60,4 +64,5 @@ def get_settings() -> Settings:
         ),
         enrichment_base_url=os.getenv("ENRICHMENT_BASE_URL", "https://hexdb.io/api/v1"),
         adsbdb_base_url=os.getenv("ADSBDB_BASE_URL", "https://api.adsbdb.com/v0"),
+        center_alt_m=_get_float("CENTER_ALT_M", 531.0),
     )

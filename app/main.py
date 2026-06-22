@@ -43,7 +43,7 @@ def get_aircraft(
         ):
             continue
         enriched = enrichment.enrich(state)
-        enriched["classification"] = classify(state, lat, lon)
+        enriched["classification"] = classify(state, lat, lon, settings.center_alt_m)
         aircraft.append(enriched)
 
     return {

@@ -28,7 +28,7 @@ const LANDED_GRACE_MS = 2 * 60 * 1000;
 
 // A changed classification must hold this long before the displayed status
 // switches — filters out brief altitude blips (e.g. a flare while landing).
-const CLASS_STABLE_MS = 10 * 1000;
+const CLASS_STABLE_MS = 5 * 1000;
 
 // ----- Geo helpers (mirror app/utils/geo.py) -----
 const R_EARTH_KM = 6371.0088;
@@ -95,7 +95,7 @@ const lastSeen = new Set(); // icao24s present on the radar in the previous poll
 const notified = new Map(); // icao24 -> deadline (ms epoch)
 // icao24 whose card should be scrolled into view on the next render.
 let pendingScrollIcao = null;
-const prevAlt = new Map(); // icao24 -> altitude_m at previous poll
+const prevGround = new Map(); // icao24 -> boolean: was on-ground last poll
 const landedAt = new Map(); // icao24 -> timestamp it transitioned airborne -> ground
 // Classification smoothing: the displayed status only changes once a new
 // classification has held for CLASS_STABLE_MS, so a brief altitude blip while
@@ -343,24 +343,27 @@ async function fetchData() {
     const present = new Set();
     for (const ac of enriched) {
       present.add(ac.icao24);
-      const onGround = ac.altitude_m <= 0;
+      const onGround = ac.altitude_m <= 0 || ac.classification === "ground";
       if (onGround) {
-        if (prevAlt.get(ac.icao24) > 0) landedAt.set(ac.icao24, now);
+        if (prevGround.get(ac.icao24) === false) landedAt.set(ac.icao24, now);
       } else {
         landedAt.delete(ac.icao24); // airborne again (or still flying)
       }
-      prevAlt.set(ac.icao24, ac.altitude_m);
+      prevGround.set(ac.icao24, onGround);
     }
-    for (const id of prevAlt.keys()) if (!present.has(id)) prevAlt.delete(id);
+    for (const id of prevGround.keys()) if (!present.has(id)) prevGround.delete(id);
     for (const id of landedAt.keys()) if (!present.has(id)) landedAt.delete(id);
     for (const id of shownClass.keys()) if (!present.has(id)) shownClass.delete(id);
     for (const id of pendingClass.keys()) if (!present.has(id)) pendingClass.delete(id);
 
     // Show airborne aircraft, plus grounded ones only within the landing grace.
-    // Grounded-and-kept aircraft are tagged `_landed` for styling/sorting.
+    // "Ground" means alt_m == 0 (ADS-B literal) OR backend classified as "ground"
+    // (barometric altitude within 50 m of airport elevation). Grounded-and-kept
+    // aircraft are tagged `_landed` for styling/sorting.
     const list = [];
     for (const ac of enriched) {
-      if (ac.altitude_m > 0) {
+      const onGround = ac.altitude_m <= 0 || ac.classification === "ground";
+      if (!onGround) {
         list.push(ac);
       } else {
         const t = landedAt.get(ac.icao24);
