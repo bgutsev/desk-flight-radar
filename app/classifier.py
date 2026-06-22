@@ -29,7 +29,7 @@ APPROACH_HALF_ANGLE_DEG = 90.0
 
 # Barometric altitude may be within this many metres of the airport elevation
 # while the aircraft is still on the ground or just rolling.
-GROUND_TOLERANCE_M = 50.0
+GROUND_TOLERANCE_M = 100.0
 
 
 def classify(

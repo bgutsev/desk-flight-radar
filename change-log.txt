@@ -1,5 +1,7 @@
 # Change log — one line per file edit, appended automatically by .claude/log-change.py
-# Format: TIMESTAMP | TOOL | FILE
+# Format: TIMESTAMP | TOOL | FILE                                     | COMMENT
+# COMMENT: intent from /log-intent skill (first edit of a task) or diff heuristic (fallback)
+# Demo entry below shows the /log-intent skill result vs the heuristic lines above it.
 2026-06-22 15:20:42 | Edit         | change-log.txt
 2026-06-22 16:28:12 | Edit         | app\config.py
 2026-06-22 16:28:32 | Edit         | app\classifier.py
@@ -25,3 +27,12 @@
 2026-06-22 17:07:48 | Edit         | static\style.css
 2026-06-22 17:08:04 | Edit         | static\radar.js
 2026-06-22 17:08:08 | Edit         | static\radar.js
+2026-06-22 17:15:46 | Edit         | app\classifier.py
+2026-06-22 17:15:55 | Edit         | static\radar.js
+2026-06-22 17:16:01 | Edit         | static\radar.js
+2026-06-22 17:16:09 | Edit         | static\radar.js
+2026-06-22 17:27:25 | Write        | .claude\skills\log-intent\SKILL.md
+2026-06-22 17:27:44 | Write        | .claude\log-change.py                    | new file (77 lines)
+2026-06-22 17:27:50 | Edit         | CLAUDE.md                                | +3 lines
+2026-06-22 17:28:05 | Edit         | change-log.txt                           | +1 lines
+2026-06-22 17:29:52 | Edit         | change-log.txt                           | demo: show how /log-intent writes meaningful comments to change-log.txt

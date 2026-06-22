@@ -224,6 +224,13 @@ function playAlert() {
 // Resist brief flips: a new classification only takes effect once it has held
 // for CLASS_STABLE_MS. Brand-new contacts adopt their classification at once.
 function smoothClass(icao, raw, now) {
+  // Ground state is never delayed — show it immediately so the filter loop
+  // can gate on it within the same poll.
+  if (raw === "ground") {
+    shownClass.set(icao, "ground");
+    pendingClass.delete(icao);
+    return "ground";
+  }
   const shown = shownClass.get(icao);
   if (shown === undefined) {
     shownClass.set(icao, raw);
@@ -340,9 +347,10 @@ async function fetchData() {
       const onGround = ac.altitude_m <= 0 || ac.classification === "ground";
       if (onGround) {
         if (prevGround.get(ac.icao24) === false) landedAt.set(ac.icao24, now);
-      } else {
-        landedAt.delete(ac.icao24); // airborne again (or still flying)
+      } else if (ac.classification === "departing") {
+        landedAt.delete(ac.icao24); // confirmed takeoff — cancel grace period
       }
+      // "arriving" at low altitude does NOT clear landedAt (baro noise on ground)
       prevGround.set(ac.icao24, onGround);
     }
     for (const id of prevGround.keys()) if (!present.has(id)) prevGround.delete(id);
@@ -357,13 +365,20 @@ async function fetchData() {
     const list = [];
     for (const ac of enriched) {
       const onGround = ac.altitude_m <= 0 || ac.classification === "ground";
-      if (!onGround) {
-        list.push(ac);
+      const t = landedAt.get(ac.icao24);
+      const withinGrace = t !== undefined && now - t < LANDED_GRACE_MS;
+
+      if (onGround) {
+        // On ground and recently transitioned from airborne → show as landed.
+        if (withinGrace) list.push({ ...ac, _landed: true });
+        // else: sitting there before we first noticed, never shown.
+      } else if (withinGrace && ac.classification !== "departing") {
+        // Briefly outside ground band (baro noise) but still within grace and
+        // not climbing away — keep the grey landed card rather than flashing
+        // back to "landing".
+        list.push({ ...ac, _landed: true });
       } else {
-        const t = landedAt.get(ac.icao24);
-        if (t !== undefined && now - t < LANDED_GRACE_MS) {
-          list.push({ ...ac, _landed: true });
-        }
+        list.push(ac);
       }
     }
 
