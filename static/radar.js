@@ -120,10 +120,14 @@ const shownClass = new Map(); // icao24 -> currently displayed classification
 const pendingClass = new Map(); // icao24 -> { cls, since } awaiting confirmation
 
 // Altitude history for trend detection (takeoff confirmation near airport).
-const altHistory = new Map(); // icao24 -> [{alt_m, ts}, ...] last ALT_HISTORY_SIZE entries
+const altHistory = new Map(); // icao24 -> [{alt, ts}, ...] last ALT_HISTORY_SIZE entries
 // Aircraft confirmed as real (not ground vehicles): either first seen from
 // outside the airport zone, or showed a sustained climb from within it.
 const confirmedAircraft = new Set();
+// Aircraft seen lifting off the ground: latched as departing so a plane that
+// just left the tarmac is never shown as "arriving". Held until it has climbed
+// clear of the airport zone (see takeoffAdjusted).
+const departingLatch = new Set(); // icao24 climbing out from an observed ground origin
 
 let selectedIcao = null; // null = no filter; set = show only this on radar
 
@@ -238,6 +242,54 @@ function playAlert() {
   }
 }
 
+// ----- Takeoff confirmation (altitude history + ground-origin latch) -----
+// Append one altitude sample, keeping only the last ALT_HISTORY_SIZE readings.
+function recordAltitude(icao, altM, ts) {
+  let history = altHistory.get(icao);
+  if (history === undefined) {
+    history = [];
+    altHistory.set(icao, history);
+  }
+  history.push({ alt: altM, ts });
+  if (history.length > ALT_HISTORY_SIZE) history.shift();
+  return history;
+}
+
+// True once the buffer is full and every consecutive step gained at least
+// ALT_CLIMB_MIN_M — i.e. a genuine sustained climb, not barometric noise.
+function sustainedClimb(history) {
+  if (history.length < ALT_HISTORY_SIZE) return false;
+  for (let i = 1; i < history.length; i++) {
+    if (history[i].alt - history[i - 1].alt < ALT_CLIMB_MIN_M) return false;
+  }
+  return true;
+}
+
+// A plane that was on the ground is taking off, so it can never be "arriving".
+// Latch it as departing the moment it leaves the tarmac and hold that until it
+// has climbed clear of the airport zone — a sustained climb over the last
+// ALT_HISTORY_SIZE readings, beyond AIRPORT_RADIUS_KM — after which the backend
+// classification is trusted again.
+function takeoffAdjusted(ac, dist, now) {
+  const icao = ac.icao24;
+  const raw = ac.classification;
+  const onGround = ac.altitude_m <= 0 || raw === "ground";
+  const history = recordAltitude(icao, ac.altitude_m, now);
+
+  if (onGround) {
+    departingLatch.delete(icao); // back on the ground; re-latches on next liftoff
+    return raw;
+  }
+  if (prevGround.get(icao) === true) departingLatch.add(icao); // just lifted off
+  if (!departingLatch.has(icao)) return raw;
+
+  if (dist > AIRPORT_RADIUS_KM && sustainedClimb(history)) {
+    departingLatch.delete(icao); // climbed clear of the field — trust the backend
+    return raw;
+  }
+  return raw === "arriving" ? "departing" : raw;
+}
+
 // ----- Classification smoothing -----
 // Resist brief flips: a new classification only takes effect once it has held
 // for CLASS_STABLE_MS. Brand-new contacts adopt their classification at once.
@@ -346,7 +398,8 @@ async function fetchData() {
         ac.latitude,
         ac.longitude,
       );
-      const cls = smoothClass(ac.icao24, ac.classification, now);
+      const effective = takeoffAdjusted(ac, dist, now);
+      const cls = smoothClass(ac.icao24, effective, now);
       return {
         ...ac,
         classification: cls,
@@ -375,6 +428,8 @@ async function fetchData() {
     for (const id of landedAt.keys()) if (!present.has(id)) landedAt.delete(id);
     for (const id of shownClass.keys()) if (!present.has(id)) shownClass.delete(id);
     for (const id of pendingClass.keys()) if (!present.has(id)) pendingClass.delete(id);
+    for (const id of altHistory.keys()) if (!present.has(id)) altHistory.delete(id);
+    for (const id of departingLatch) if (!present.has(id)) departingLatch.delete(id);
 
     // Show airborne aircraft, plus grounded ones only within the landing grace.
     // "Ground" means alt_m == 0 (ADS-B literal) OR backend classified as "ground"
