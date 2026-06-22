@@ -1,17 +1,28 @@
 """Classify aircraft as arriving, departing, cruising, or ground.
 
-Primary signal: vertical rate (baro_rate from ADS-B).
-  - Descending at more than CLIMB_THRESHOLD_FPM  → arriving
-  - Climbing  at more than CLIMB_THRESHOLD_FPM  → departing
-  - High-altitude traffic (above CRUISE_ALTITUDE_M) → cruising regardless
-  - Level flight at low altitude → heading-toward-center fallback
-  - Altitude ≤ 0 (ADS-B "ground" literal) or within GROUND_TOLERANCE_M of the
-    airport elevation → ground; unless climbing, which means taking off → departing
+The on-ground decision trusts the ADS-B air/ground status bit first
+(``on_ground``); failing that, geometric (GPS/WGS84) altitude near the estimated
+field elevation. Geometric altitude is used in preference to barometric, which
+drifts with local pressure (QNH) and so cannot be compared to a fixed field
+elevation reliably — the root cause of misclassified ground traffic. Vertical
+motion uses the geometric rate when available, else the barometric rate.
+
+Field elevation is estimated dynamically from the geometric altitude of aircraft
+currently reporting the ground bit near the center
+(:func:`estimate_field_elevation`), so no per-airport elevation is hardcoded; a
+configured value only seeds the estimate until live ground traffic is seen.
+
+  - On the ground (status bit) → ground
+  - Geometric altitude within GROUND_TOLERANCE_M of the field, not climbing → ground
+  - Above CRUISE_ALTITUDE_M → cruising regardless
+  - Descending faster than CLIMB_THRESHOLD_FPM → arriving
+  - Climbing faster than CLIMB_THRESHOLD_FPM → departing
+  - Level flight at low altitude → cruising (overflying/transit)
 """
 
 from __future__ import annotations
 
-from typing import Literal, Mapping
+from typing import Literal, Mapping, Sequence
 
 from app.utils import geo
 
@@ -24,33 +35,81 @@ CRUISE_ALTITUDE_M = 8000.0
 # Minimum vertical speed (ft/min) to count as a meaningful climb or descent.
 CLIMB_THRESHOLD_FPM = 200.0
 
-# Fallback: heading within this half-angle of bearing-to-center → arriving.
-APPROACH_HALF_ANGLE_DEG = 90.0
+# Geometric altitude this close to the estimated field elevation counts as on
+# the ground. Wider than a barometric band would need, to absorb GPS vertical
+# error (typically ±15-25 m).
+GROUND_TOLERANCE_M = 30.0
 
-# Barometric altitude may be within this many metres of the airport elevation
-# while the aircraft is still on the ground or just rolling.
-GROUND_TOLERANCE_M = 10.0
+# Aircraft within this distance of the center feed the field-elevation estimate.
+FIELD_CALIB_RADIUS_KM = 5.0
+
+
+def _vertical_rate(aircraft: Mapping[str, object]) -> float:
+    """Geometric rate when present, else the barometric rate."""
+    geom = aircraft.get("geom_rate_fpm")
+    if geom:
+        return float(geom)  # type: ignore[arg-type]
+    return float(aircraft.get("vertical_rate_fpm", 0.0))  # type: ignore[arg-type]
+
+
+def estimate_field_elevation(
+    aircraft_states: Sequence[Mapping[str, object]],
+    center_lat: float,
+    center_lon: float,
+    seed_m: float,
+) -> float:
+    """Median geometric altitude of on-ground aircraft near the center.
+
+    Returns ``seed_m`` (the configured field elevation) until at least one
+    grounded aircraft with a usable geometric altitude is seen, after which the
+    estimate tracks the true field elevation regardless of barometric drift.
+    Aircraft without a geometric altitude on the ground (it reads ~0) are
+    skipped so they can't drag the estimate to zero.
+    """
+    elevations: list[float] = []
+    for ac in aircraft_states:
+        if not ac.get("on_ground"):
+            continue
+        alt = float(ac.get("altitude_geom_m") or 0.0)  # type: ignore[arg-type]
+        if alt <= 0.0:
+            continue
+        if geo.is_within_radius(
+            center_lat,
+            center_lon,
+            float(ac["latitude"]),  # type: ignore[arg-type]
+            float(ac["longitude"]),  # type: ignore[arg-type]
+            FIELD_CALIB_RADIUS_KM,
+        ):
+            elevations.append(alt)
+    if not elevations:
+        return seed_m
+    elevations.sort()
+    mid = len(elevations) // 2
+    if len(elevations) % 2:
+        return elevations[mid]
+    return (elevations[mid - 1] + elevations[mid]) / 2.0
 
 
 def classify(
     aircraft: Mapping[str, object],
-    center_lat: float,
-    center_lon: float,
-    center_alt_m: float = 465.0,
+    field_elev_m: float,
 ) -> Classification:
-    """Return the arrival/departure/ground state of ``aircraft`` w.r.t. the center."""
+    """Return the arrival/departure/ground state of ``aircraft``."""
 
-    altitude_m = float(aircraft["altitude_m"])  # type: ignore[arg-type]
-    vr = float(aircraft.get("vertical_rate_fpm", 0.0))  # type: ignore[arg-type]
+    vr = _vertical_rate(aircraft)
 
-    # ADS-B broadcasts alt_baro = "ground" → stored as 0.0 by the flight source.
-    # Barometric altitude within GROUND_TOLERANCE_M of the airport elevation also
-    # means the aircraft is on or near the tarmac — but a positive climb rate
-    # indicates it is rolling for takeoff, so classify that as departing.
-    if altitude_m <= 0.0 or abs(altitude_m - center_alt_m) <= GROUND_TOLERANCE_M:
+    # 1. Authoritative ADS-B air/ground status bit.
+    if aircraft.get("on_ground"):
         return "ground"
 
-    if altitude_m > CRUISE_ALTITUDE_M:
+    # 2. Geometric altitude within the field band and not climbing away → on the
+    #    ground (or touching down). A positive climb rate means it is rolling
+    #    for takeoff, so that falls through to "departing" below.
+    alt_geom = float(aircraft["altitude_geom_m"])  # type: ignore[arg-type]
+    if abs(alt_geom - field_elev_m) <= GROUND_TOLERANCE_M and vr <= CLIMB_THRESHOLD_FPM:
+        return "ground"
+
+    if alt_geom > CRUISE_ALTITUDE_M:
         return "cruising"
 
     if vr < -CLIMB_THRESHOLD_FPM:
@@ -58,10 +117,6 @@ def classify(
     if vr > CLIMB_THRESHOLD_FPM:
         return "departing"
 
-    # Near-level flight at low altitude: fall back to heading geometry.
-    ac_lat = float(aircraft["latitude"])  # type: ignore[arg-type]
-    ac_lon = float(aircraft["longitude"])  # type: ignore[arg-type]
-    heading = float(aircraft["heading_deg"])  # type: ignore[arg-type]
-    target_bearing = geo.bearing_deg(ac_lat, ac_lon, center_lat, center_lon)
-    rel = abs(geo.relative_bearing(heading, target_bearing))
-    return "arriving" if rel < APPROACH_HALF_ANGLE_DEG else "departing"
+    # Near-level flight at low altitude: neither descending to land nor climbing
+    # to depart, so it is overflying/transiting, not landing or taking off.
+    return "cruising"

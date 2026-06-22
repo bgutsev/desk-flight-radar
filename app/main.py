@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 
-from app.classifier import classify
+from app.classifier import classify, estimate_field_elevation
 from app.clients.enrichment import get_enrichment_client
 from app.clients.flight_source import get_flight_source
 from app.config import get_settings
@@ -36,6 +36,11 @@ def get_aircraft(
     # empty data), so this never raises on a bad upstream response.
     states = flight_source.get_states(lat, lon, radius_km)
 
+    # Learn the field elevation from grounded traffic near the center (falling
+    # back to the configured seed), so the ground band tracks the real airport
+    # elevation instead of a hardcoded constant skewed by barometric drift.
+    field_elev_m = estimate_field_elevation(states, lat, lon, settings.center_alt_m)
+
     aircraft: list[dict[str, object]] = []
     for state in states:
         if not is_within_radius(
@@ -43,7 +48,7 @@ def get_aircraft(
         ):
             continue
         enriched = enrichment.enrich(state)
-        enriched["classification"] = classify(state, lat, lon, settings.center_alt_m)
+        enriched["classification"] = classify(state, field_elev_m)
         aircraft.append(enriched)
 
     return {
@@ -52,6 +57,7 @@ def get_aircraft(
             "lon": lon,
         },
         "radius_km": radius_km,
+        "field_elev_m": field_elev_m,
         "mock": mock,
         "aircraft": aircraft,
     }

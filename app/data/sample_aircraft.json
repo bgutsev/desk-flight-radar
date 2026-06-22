@@ -1,0 +1,24 @@
+[
+  {
+    "icao24": "4b1805",
+    "callsign": "SWR123",
+    "type": "BCS3",
+    "lat_offset": 0.08,
+    "lon_offset": -0.05,
+    "altitude_m": 2400,
+    "vertical_rate_fpm": -900,
+    "velocity_kmh": 320,
+    "heading_deg": 210
+  },
+  {
+    "icao24": "a1b2c3",
+    "callsign": "DLH456",
+    "type": "A388",
+    "lat_offset": -0.12,
+    "lon_offset": 0.09,
+    "altitude_m": 3100,
+    "vertical_rate_fpm": 1800,
+    "velocity_kmh": 410,
+    "heading_deg": 244
+  }
+]

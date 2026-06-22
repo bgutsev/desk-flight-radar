@@ -64,3 +64,14 @@
 2026-06-22 21:46:46 | Edit         | tests\test_main.py                       | Add takeoff classifier test and a cycling landing aircraft to the mock source
 2026-06-22 21:50:27 | Edit         | static\radar.js                          | Only latch just-off-ground aircraft as departing when actually climbing, not descending
 2026-06-22 21:58:55 | Edit         | README.md                                | Fix README clone command: plain URL, not a markdown link inside the code block
+2026-06-22 22:09:42 | Edit         | app\classifier.py                        | Classify level low-altitude traffic as cruising so overflights dont flip arriving/departing
+2026-06-22 22:12:46 | Edit         | tests\test_classifier.py                 | Classify level low-altitude traffic as cruising so overflights dont flip arriving/departing
+2026-06-22 22:18:39 | Edit         | static\radar.js                          | Ding on transition into arriving/departing, not just brand-new contacts, so takeoff onset alerts
+2026-06-22 22:36:22 | Write        | LICENSE                                  | Ding on transition into arriving/departing, not just brand-new contacts, so takeoff onset alerts
+2026-06-22 22:36:29 | Write        | app\data\sample_aircraft.json            | Ding on transition into arriving/departing, not just brand-new contacts, so takeoff onset alerts
+2026-06-22 22:36:36 | Edit         | app\clients\flight_source.py             | Ding on transition into arriving/departing, not just brand-new contacts, so takeoff onset alerts
+2026-06-22 22:40:43 | Edit         | app\clients\flight_source.py             | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
+2026-06-22 22:41:58 | Write        | app\classifier.py                        | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
+2026-06-22 22:42:03 | Edit         | app\main.py                              | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
+2026-06-22 22:42:37 | Write        | tests\test_classifier.py                 | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
+2026-06-22 22:43:19 | Edit         | static\radar.js                          | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification

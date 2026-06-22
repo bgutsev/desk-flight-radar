@@ -10,8 +10,11 @@ Defines the :class:`FlightSource` protocol plus two implementations:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+from functools import lru_cache
+from pathlib import Path
 from typing import Protocol, TypedDict, runtime_checkable
 
 import httpx
@@ -22,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 _KM_PER_NM = 1.852
 _FT_PER_M = 0.3048
+
+# Offline sample traffic for mock mode. Stored as JSON (per the project's
+# offline-mode-via-sample-JSON requirement) with positions expressed as
+# lat/lon offsets from the query center so the canned aircraft always land
+# near whatever point the user is viewing.
+_SAMPLE_PATH = Path(__file__).resolve().parent.parent / "data" / "sample_aircraft.json"
 
 # Last successful adsb.fi result per query signature, used as a fallback when
 # the upstream API errors or times out. Keyed by (lat, lon, radius_km).
@@ -36,10 +45,13 @@ class Aircraft(TypedDict):
     type: str
     latitude: float
     longitude: float
-    altitude_m: float
-    vertical_rate_fpm: float  # ft/min; positive = climbing, negative = descending
+    altitude_m: float  # barometric altitude (m); drifts with local pressure (QNH)
+    altitude_geom_m: float  # geometric (GPS/WGS84) altitude (m); pressure-independent
+    vertical_rate_fpm: float  # baro rate, ft/min; positive = climbing
+    geom_rate_fpm: float  # geometric rate, ft/min; preferred over baro when present
     velocity_kmh: float
     heading_deg: float
+    on_ground: bool  # ADS-B air/ground status bit — authoritative on-ground signal
 
 
 @runtime_checkable
@@ -70,7 +82,7 @@ def _mock_takeoff(lat: float, lon: float, now: float) -> Aircraft:
     """
     phase = now % _TAKEOFF_PERIOD_S
     if phase < _TAKEOFF_GROUND_S:
-        # Parked on the runway: ADS-B "ground" → 0 m, no climb, taxi speed.
+        # Parked on the runway: ADS-B reports the ground bit, no climb, taxi speed.
         return Aircraft(
             icao24="c0ffee",
             callsign="TKO000",
@@ -78,9 +90,12 @@ def _mock_takeoff(lat: float, lon: float, now: float) -> Aircraft:
             latitude=lat,
             longitude=lon,
             altitude_m=0.0,
+            altitude_geom_m=0.0,
             vertical_rate_fpm=0.0,
+            geom_rate_fpm=0.0,
             velocity_kmh=30,
             heading_deg=90,
+            on_ground=True,
         )
     # Climbing out: altitude and eastward distance grow with progress.
     progress = (phase - _TAKEOFF_GROUND_S) / _TAKEOFF_CLIMB_S
@@ -91,9 +106,12 @@ def _mock_takeoff(lat: float, lon: float, now: float) -> Aircraft:
         latitude=lat,
         longitude=lon + progress * _TAKEOFF_LON_SPREAD,
         altitude_m=progress * _TAKEOFF_TOP_ALT_M,
+        altitude_geom_m=progress * _TAKEOFF_TOP_ALT_M,
         vertical_rate_fpm=2000,  # climbing → departing
+        geom_rate_fpm=2000,
         velocity_kmh=150 + progress * 250,
         heading_deg=90,
+        on_ground=False,
     )
 
 
@@ -115,7 +133,7 @@ def _mock_landing(lat: float, lon: float, now: float) -> Aircraft:
     """
     phase = now % _LANDING_PERIOD_S
     if phase >= _LANDING_APPROACH_S:
-        # Parked on the runway after landing: ADS-B "ground" → 0 m, taxi speed.
+        # Parked on the runway after landing: ADS-B reports the ground bit, taxi speed.
         return Aircraft(
             icao24="1a4d09",
             callsign="LND999",
@@ -123,9 +141,12 @@ def _mock_landing(lat: float, lon: float, now: float) -> Aircraft:
             latitude=lat,
             longitude=lon,
             altitude_m=0.0,
+            altitude_geom_m=0.0,
             vertical_rate_fpm=0.0,
+            geom_rate_fpm=0.0,
             velocity_kmh=30,
             heading_deg=90,
+            on_ground=True,
         )
     # On approach: altitude and westward distance shrink as the plane nears the
     # field. ``remaining`` is 1 at the start of the approach and 0 at touchdown.
@@ -137,52 +158,68 @@ def _mock_landing(lat: float, lon: float, now: float) -> Aircraft:
         latitude=lat,
         longitude=lon - remaining * _LANDING_LON_SPREAD,
         altitude_m=remaining * _LANDING_TOP_ALT_M,
+        altitude_geom_m=remaining * _LANDING_TOP_ALT_M,
         vertical_rate_fpm=-1500,  # descending → arriving
+        geom_rate_fpm=-1500,
         velocity_kmh=160 + remaining * 200,
         heading_deg=90,  # heading east toward the field from the west
     )
 
 
+@lru_cache(maxsize=1)
+def _sample_traffic() -> tuple[dict[str, object], ...]:
+    """Load and cache the offline sample aircraft from ``sample_aircraft.json``."""
+    with _SAMPLE_PATH.open(encoding="utf-8") as fh:
+        return tuple(json.load(fh))
+
+
+def _sample_aircraft(lat: float, lon: float) -> list[Aircraft]:
+    """Build the canned sample aircraft, offset from the query center.
+
+    Geometric altitude/rate default to the barometric values and ``on_ground``
+    defaults to ``False`` when the sample omits them, so existing airborne
+    samples need no edits.
+    """
+    return [
+        Aircraft(
+            icao24=str(ac["icao24"]),
+            callsign=str(ac["callsign"]),
+            type=str(ac["type"]),
+            latitude=lat + float(ac["lat_offset"]),  # type: ignore[arg-type]
+            longitude=lon + float(ac["lon_offset"]),  # type: ignore[arg-type]
+            altitude_m=float(ac["altitude_m"]),  # type: ignore[arg-type]
+            altitude_geom_m=float(ac.get("altitude_geom_m", ac["altitude_m"])),  # type: ignore[arg-type]
+            vertical_rate_fpm=float(ac["vertical_rate_fpm"]),  # type: ignore[arg-type]
+            geom_rate_fpm=float(ac.get("geom_rate_fpm", ac["vertical_rate_fpm"])),  # type: ignore[arg-type]
+            velocity_kmh=float(ac["velocity_kmh"]),  # type: ignore[arg-type]
+            heading_deg=float(ac["heading_deg"]),  # type: ignore[arg-type]
+            on_ground=bool(ac.get("on_ground", False)),
+        )
+        for ac in _sample_traffic()
+    ]
+
+
 class MockFlightSource:
     """Returns deterministic aircraft offset from the query center.
 
-    Two aircraft (an arrival and a departure) sit ~9–13 km out so they survive a
+    The base traffic (an arrival and a departure) is loaded from
+    ``app/data/sample_aircraft.json`` and sits ~9–13 km out so it survives a
     typical radius filter, plus two time-driven aircraft that cycle through a
     takeoff (ground → liftoff → climb-out) and a landing (approach → touchdown →
     parked) so both transitions can be tested in mock mode.
     """
 
     def get_states(self, lat: float, lon: float, radius_km: float) -> list[Aircraft]:
+        now = time.monotonic()
         return [
-            Aircraft(
-                icao24="4b1805",
-                callsign="SWR123",
-                type="BCS3",
-                latitude=lat + 0.08,
-                longitude=lon - 0.05,
-                altitude_m=2400,  # on approach
-                vertical_rate_fpm=-900,  # descending → arriving
-                velocity_kmh=320,
-                heading_deg=210,
-            ),
-            Aircraft(
-                icao24="a1b2c3",
-                callsign="DLH456",
-                type="A388",
-                latitude=lat - 0.12,
-                longitude=lon + 0.09,
-                altitude_m=3100,  # just departed
-                vertical_rate_fpm=1800,  # climbing → departing
-                velocity_kmh=410,
-                heading_deg=244,
-            ),
-            _mock_takeoff(lat, lon, time.monotonic()),
-            _mock_landing(lat, lon, time.monotonic()),
+            *_sample_aircraft(lat, lon),
+            _mock_takeoff(lat, lon, now),
+            _mock_landing(lat, lon, now),
         ]
 
 
 def _parse_altitude_m(raw: object) -> float:
-    """Convert an adsb.fi alt_baro value (feet or 'ground') to metres."""
+    """Convert an adsb.fi altitude value (feet or 'ground') to metres."""
     if raw is None or raw == "ground":
         return 0.0
     return float(raw) * _FT_PER_M
@@ -232,6 +269,14 @@ def _parse_states(payload: object) -> list[Aircraft]:
         lon_val = ac.get("lon")
         if lat_val is None or lon_val is None:
             continue
+        alt_baro_raw = ac.get("alt_baro")
+        altitude_m = _parse_altitude_m(alt_baro_raw)
+        # Geometric altitude is pressure-independent; fall back to baro when the
+        # transponder omits it.
+        alt_geom_raw = ac.get("alt_geom")
+        altitude_geom_m = (
+            float(alt_geom_raw) * _FT_PER_M if alt_geom_raw is not None else altitude_m
+        )
         results.append(
             Aircraft(
                 icao24=ac.get("hex") or "",
@@ -239,10 +284,15 @@ def _parse_states(payload: object) -> list[Aircraft]:
                 type=(ac.get("t") or "").strip(),
                 latitude=float(lat_val),
                 longitude=float(lon_val),
-                altitude_m=_parse_altitude_m(ac.get("alt_baro")),
+                altitude_m=altitude_m,
+                altitude_geom_m=altitude_geom_m,
                 vertical_rate_fpm=float(ac.get("baro_rate") or 0.0),
+                # Prefer the geometric rate; fall back to the barometric one.
+                geom_rate_fpm=float(ac.get("geom_rate") or ac.get("baro_rate") or 0.0),
                 velocity_kmh=float(ac.get("gs") or 0.0) * _KM_PER_NM,
                 heading_deg=float(ac.get("track") or 0.0),
+                # The literal "ground" in alt_baro is the ADS-B air/ground bit.
+                on_ground=alt_baro_raw == "ground",
             )
         )
     return results
