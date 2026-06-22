@@ -26,6 +26,10 @@ const CARD_NOTICE_MS = 2 * 60 * 1000;
 // A grounded (0 m) aircraft stays visible only this long after it lands.
 const LANDED_GRACE_MS = 2 * 60 * 1000;
 
+// A changed classification must hold this long before the displayed status
+// switches — filters out brief altitude blips (e.g. a flare while landing).
+const CLASS_STABLE_MS = 10 * 1000;
+
 // ----- Geo helpers (mirror app/utils/geo.py) -----
 const R_EARTH_KM = 6371.0088;
 const toRad = (d) => (d * Math.PI) / 180;
@@ -84,10 +88,20 @@ let lastList = [];
 
 const photoCache = new Map(); // key -> url | null
 const blipPositions = new Map(); // icao24 -> {x, y} CSS pixels, for click detection
-const seenAircraft = new Set(); // icao24s already announced since session start
-const cardNotices = new Map(); // icao24 -> { msg, shownAt }
+const lastSeen = new Set(); // icao24s present on the radar in the previous poll
+// Every aircraft that triggered an audio alert, mapped to the timestamp its
+// breathing should stop. Each ding adds an entry, so every alert has a matching
+// flashing card for CARD_NOTICE_MS.
+const notified = new Map(); // icao24 -> deadline (ms epoch)
+// icao24 whose card should be scrolled into view on the next render.
+let pendingScrollIcao = null;
 const prevAlt = new Map(); // icao24 -> altitude_m at previous poll
 const landedAt = new Map(); // icao24 -> timestamp it transitioned airborne -> ground
+// Classification smoothing: the displayed status only changes once a new
+// classification has held for CLASS_STABLE_MS, so a brief altitude blip while
+// landing isn't shown as "taking off".
+const shownClass = new Map(); // icao24 -> currently displayed classification
+const pendingClass = new Map(); // icao24 -> { cls, since } awaiting confirmation
 
 let selectedIcao = null; // null = no filter; set = show only this on radar
 
@@ -212,22 +226,64 @@ function playAlert() {
   }
 }
 
-// ----- New-aircraft detection (sound + card notices) -----
-function detectNewAircraft(list) {
-  let hasNew = false;
+// ----- Classification smoothing -----
+// Resist brief flips: a new classification only takes effect once it has held
+// for CLASS_STABLE_MS. Brand-new contacts adopt their classification at once.
+function smoothClass(icao, raw, now) {
+  const shown = shownClass.get(icao);
+  if (shown === undefined) {
+    shownClass.set(icao, raw);
+    pendingClass.delete(icao);
+    return raw;
+  }
+  if (raw === shown) {
+    pendingClass.delete(icao); // back to the stable state
+    return shown;
+  }
+  const pending = pendingClass.get(icao);
+  if (pending && pending.cls === raw) {
+    if (now - pending.since >= CLASS_STABLE_MS) {
+      shownClass.set(icao, raw);
+      pendingClass.delete(icao);
+      return raw;
+    }
+  } else {
+    pendingClass.set(icao, { cls: raw, since: now });
+  }
+  return shown; // keep the stable status until the change is confirmed
+}
+
+// ----- New-aircraft detection (sound + breathing card) -----
+// Ding whenever an arriving/departing aircraft that wasn't present in the
+// previous poll shows up — mock or live, foreground or background. If several
+// appear at once the farthest one wins (it just crossed into the scope); its
+// card breathes and scrolls into view so the sound has a clear visual anchor.
+function detectNewAircraft(list, now) {
+  let newestAc = null;
+  let newestDist = -1;
+  const present = new Set();
   for (const ac of list) {
-    if (!seenAircraft.has(ac.icao24)) {
-      seenAircraft.add(ac.icao24);
-      if (ac.classification === "arriving" || ac.classification === "departing") {
-        cardNotices.set(ac.icao24, {
-          msg: `▶ NEW ${ac.classification.toUpperCase()}`,
-          shownAt: Date.now(),
-        });
-        hasNew = true;
-      }
+    present.add(ac.icao24);
+    const isNew = !lastSeen.has(ac.icao24);
+    if (
+      isNew &&
+      !ac._landed &&
+      (ac.classification === "arriving" || ac.classification === "departing") &&
+      ac._dist > newestDist
+    ) {
+      newestAc = ac;
+      newestDist = ac._dist;
     }
   }
-  if (hasNew) playAlert();
+  // Remember exactly who is present now, for the next poll's comparison.
+  lastSeen.clear();
+  for (const id of present) lastSeen.add(id);
+
+  if (newestAc !== null) {
+    notified.set(newestAc.icao24, now + CARD_NOTICE_MS);
+    pendingScrollIcao = newestAc.icao24;
+    playAlert();
+  }
 }
 
 
@@ -271,7 +327,14 @@ async function fetchData() {
         ac.latitude,
         ac.longitude,
       );
-      return { ...ac, _dist: dist, _bearing: brg, _frac: dist / data.radius_km };
+      const cls = smoothClass(ac.icao24, ac.classification, now);
+      return {
+        ...ac,
+        classification: cls,
+        _dist: dist,
+        _bearing: brg,
+        _frac: dist / data.radius_km,
+      };
     });
 
     // Track landings: an aircraft we previously saw airborne and now see at 0 m
@@ -290,13 +353,22 @@ async function fetchData() {
     }
     for (const id of prevAlt.keys()) if (!present.has(id)) prevAlt.delete(id);
     for (const id of landedAt.keys()) if (!present.has(id)) landedAt.delete(id);
+    for (const id of shownClass.keys()) if (!present.has(id)) shownClass.delete(id);
+    for (const id of pendingClass.keys()) if (!present.has(id)) pendingClass.delete(id);
 
     // Show airborne aircraft, plus grounded ones only within the landing grace.
-    const list = enriched.filter((ac) => {
-      if (ac.altitude_m > 0) return true;
-      const t = landedAt.get(ac.icao24);
-      return t !== undefined && now - t < LANDED_GRACE_MS;
-    });
+    // Grounded-and-kept aircraft are tagged `_landed` for styling/sorting.
+    const list = [];
+    for (const ac of enriched) {
+      if (ac.altitude_m > 0) {
+        list.push(ac);
+      } else {
+        const t = landedAt.get(ac.icao24);
+        if (t !== undefined && now - t < LANDED_GRACE_MS) {
+          list.push({ ...ac, _landed: true });
+        }
+      }
+    }
 
     incoming.clear();
     for (const ac of list) incoming.set(ac.icao24, ac);
@@ -306,7 +378,7 @@ async function fetchData() {
       `${list.length} aircraft · ` +
       `${data.mock ? "MOCK" : "LIVE"} · updated ${new Date().toLocaleTimeString()}`;
 
-    detectNewAircraft(list);
+    detectNewAircraft(list, now);
     renderCards();
 
     setWarning(list.length === 0, "NO DATA");
@@ -389,12 +461,27 @@ function selectAircraft(icao) {
   renderCards();
 }
 
+// Human-friendly status label shown on the badge. Class names stay
+// arriving/departing/cruising (for colors); only the displayed text changes.
+function statusLabel(ac) {
+  if (ac._landed) return "landed";
+  if (ac.classification === "arriving") return "landing";
+  if (ac.classification === "departing") return "taking off";
+  return ac.classification;
+}
+
 // ----- Aircraft cards -----
+// Order: arriving/departing first, then airborne cruising, then landed at the bottom.
+function cardPriority(ac) {
+  if (ac._landed) return 2;
+  if (ac.classification === "arriving" || ac.classification === "departing") return 0;
+  return 1;
+}
+
 function renderCards() {
-  const priority = (c) => (c === "arriving" || c === "departing" ? 0 : 1);
   const sorted = [...lastList].sort((a, b) => {
-    const pa = priority(a.classification);
-    const pb = priority(b.classification);
+    const pa = cardPriority(a);
+    const pb = cardPriority(b);
     if (pa !== pb) return pa - pb;
     return a._dist - b._dist;
   });
@@ -403,10 +490,20 @@ function renderCards() {
   cardsEl.classList.toggle("has-selection", selectedIcao !== null);
   const now = Date.now();
 
+  // Drop alerts whose flash window has elapsed.
+  for (const [id, deadline] of notified) {
+    if (now >= deadline) notified.delete(id);
+  }
+
   for (const ac of sorted) {
     const card = document.createElement("div");
     const isSelected = selectedIcao === ac.icao24;
-    card.className = `card ${ac.classification}${isSelected ? " selected" : ""}`;
+    const stateClass = ac._landed ? "landed" : ac.classification;
+    const isNotifying = !ac._landed && notified.has(ac.icao24);
+    card.className =
+      `card ${stateClass}` +
+      `${isSelected ? " selected" : ""}` +
+      `${isNotifying ? " notify-active" : ""}`;
     card.dataset.icao = ac.icao24;
 
     const callsign = ac.callsign || ac.icao24 || "——";
@@ -420,15 +517,12 @@ function renderCards() {
       ? `<img class="card-photo" src="${url}" alt="" />`
       : `<div class="card-photo placeholder"></div>`;
 
-    const notice = cardNotices.get(ac.icao24);
-    const alertBadge = notice && now - notice.shownAt < CARD_NOTICE_MS;
-
     card.innerHTML = `
       ${photoHtml}
       <div class="card-body">
         <div class="card-top">
           <span class="callsign">${callsign}</span>
-          <span class="badge${alertBadge ? " badge-alert" : ""}">${ac.classification}</span>
+          <span class="badge">${statusLabel(ac)}</span>
         </div>
         <div class="type-alt">${type} ${alt}</div>
         ${routeHtml(ac)}
@@ -441,6 +535,12 @@ function renderCards() {
 
     card.addEventListener("click", () => selectAircraft(ac.icao24));
     cardsEl.appendChild(card);
+
+    // Bring the just-notified card into view so the sound has a visual anchor.
+    if (pendingScrollIcao === ac.icao24) {
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      pendingScrollIcao = null;
+    }
   }
 }
 

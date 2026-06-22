@@ -294,6 +294,25 @@ h1 {
   border-left-color: #2b6cff;
 }
 
+/* Just-landed: greyed-out card */
+.card.landed {
+  border-left-color: #6b7280;
+  background: #15171a;
+  color: #8a9199;
+}
+.card.landed .callsign {
+  color: #b6bcc4;
+}
+.card.landed .type,
+.card.landed .alt,
+.card.landed .route-line,
+.card.landed .meta {
+  color: #6b7280;
+}
+.card.landed .badge {
+  color: #9aa0a8;
+}
+
 /* Selection: bolder frame on all sides */
 .card.selected {
   border-width: 2px;
@@ -309,6 +328,10 @@ h1 {
 .card.cruising.selected {
   border-color: #2b6cff;
   box-shadow: 0 0 12px rgba(43, 108, 255, 0.25);
+}
+.card.landed.selected {
+  border-color: #8a9199;
+  box-shadow: 0 0 12px rgba(138, 145, 153, 0.25);
 }
 
 /* Photo */
@@ -366,7 +389,6 @@ h1 {
 .card .badge {
   flex-shrink: 0;
   font-size: 21px;
-  font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 1px;
   padding: 2px 6px;
@@ -383,14 +405,21 @@ h1 {
   color: #6ea0ff;
 }
 
-/* Badge breathes for 2 minutes when the aircraft is newly detected */
-@keyframes breathe {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.85; text-shadow: 0 0 6px currentColor; }
+/* The most recent notification's card breathes for 2 minutes (or until the
+   next notification takes over). Only one card breathes at a time. */
+@keyframes card-breathe {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(0, 255, 102, 0.15);
+    border-color: var(--green-dim);
+  }
+  50% {
+    box-shadow: 0 0 16px 2px rgba(0, 255, 102, 0.55);
+    border-color: var(--green);
+  }
 }
 
-.badge.badge-alert {
-  animation: breathe 2.5s ease-in-out infinite;
+.card.notify-active {
+  animation: card-breathe 2.4s ease-in-out infinite;
 }
 
 .card .route {
