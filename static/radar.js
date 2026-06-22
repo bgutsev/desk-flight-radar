@@ -30,22 +30,22 @@ const LANDED_GRACE_MS = 2 * 60 * 1000;
 // switches — filters out brief altitude blips (e.g. a flare while landing).
 const CLASS_STABLE_MS = 5 * 1000;
 
-// Aircraft within this distance from the center are in the airport zone.
-// They are hidden until confirmed as real aircraft (rising altitude trend),
-// which filters out ground vehicles and permanently parked planes.
-const AIRPORT_RADIUS_KM = 1.0;
-
-// Number of altitude readings to keep per aircraft for trend detection.
+// Number of altitude readings to keep per aircraft. The vertical rate is
+// derived across this window (~ this many polls) so brief GPS noise is smoothed.
 const ALT_HISTORY_SIZE = 3;
 
-// Minimum altitude gain between two consecutive readings (metres) to count
-// as a genuine climb. Filters out barometric noise (~±5 m).
-const ALT_CLIMB_MIN_M = 10.0;
+// Above this geometric altitude (m) an aircraft is en-route, shown as cruising
+// regardless of any descent (e.g. a step-down well above the field). Mirrors the
+// backend's CRUISE_ALTITUDE_M.
+const CRUISE_ALT_M = 8000.0;
 
-// Vertical rate (ft/min) above which an aircraft is climbing — mirrors the
-// backend's CLIMB_THRESHOLD_FPM. A climbing aircraft is taking off, so it is
-// never treated as on-ground/landed even when its barometric altitude briefly
-// reads within the field-elevation ground band.
+// Derived vertical speed (m/s) beyond which an aircraft counts as climbing or
+// descending. 1.0 m/s ≈ 200 ft/min, mirroring the backend's CLIMB_THRESHOLD_FPM.
+const VERT_RATE_MS = 1.0;
+
+// Reported vertical rate (ft/min) above which an aircraft is climbing — used
+// only as a fallback for brand-new contacts that lack an altitude trend yet. A
+// climbing aircraft is taking off, so it is never treated as on-ground/landed.
 const CLIMB_RATE_FPM = 200.0;
 
 // ----- Geo helpers (mirror app/utils/geo.py) -----
@@ -71,6 +71,18 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
     Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
   return (Math.atan2(x, y) * 180) / Math.PI;
 }
+
+// ----- Aircraft signal helpers -----
+// Geometric (GPS/WGS84) altitude and vertical rate are pressure-independent;
+// prefer them over the barometric values (which drift with QNH), falling back
+// when the source omits them. `??` keeps a valid 0 (e.g. on the ground).
+const altM = (ac) => ac.altitude_geom_m ?? ac.altitude_m;
+const climbRateFpm = (ac) => ac.geom_rate_fpm ?? ac.vertical_rate_fpm;
+// The ADS-B air/ground status bit is authoritative; the backend "ground"
+// classification (geom altitude within the calibrated field band) backs it up.
+const isOnGround = (ac) =>
+  ac.on_ground === true ||
+  (climbRateFpm(ac) <= CLIMB_RATE_FPM && ac.classification === "ground");
 
 // ----- DOM -----
 const canvas = document.getElementById("ppi");
@@ -110,7 +122,10 @@ let lastList = [];
 
 const photoCache = new Map(); // key -> url | null
 const blipPositions = new Map(); // icao24 -> {x, y} CSS pixels, for click detection
-const lastSeen = new Set(); // icao24s present on the radar in the previous poll
+// Classification each aircraft showed on the previous poll, so we can ding on
+// *entry* into an alert state (arriving/departing) — including a plane that was
+// already on the radar as cruising/ground and then climbs out as "departing".
+const alertedClass = new Map(); // icao24 -> trend classification (_effective) last poll
 // Every aircraft that triggered an audio alert, mapped to the timestamp its
 // breathing should stop. Each ding adds an entry, so every alert has a matching
 // flashing card for CARD_NOTICE_MS.
@@ -125,15 +140,10 @@ const landedAt = new Map(); // icao24 -> timestamp it transitioned airborne -> g
 const shownClass = new Map(); // icao24 -> currently displayed classification
 const pendingClass = new Map(); // icao24 -> { cls, since } awaiting confirmation
 
-// Altitude history for trend detection (takeoff confirmation near airport).
+// Altitude history per aircraft, used to derive the vertical rate from the
+// altitude we actually observe changing between polls (the reported baro/geom
+// rate is often zero or missing even during a clear descent).
 const altHistory = new Map(); // icao24 -> [{alt, ts}, ...] last ALT_HISTORY_SIZE entries
-// Aircraft confirmed as real (not ground vehicles): either first seen from
-// outside the airport zone, or showed a sustained climb from within it.
-const confirmedAircraft = new Set();
-// Aircraft seen lifting off the ground: latched as departing so a plane that
-// just left the tarmac is never shown as "arriving". Held until it has climbed
-// clear of the airport zone (see takeoffAdjusted).
-const departingLatch = new Set(); // icao24 climbing out from an observed ground origin
 
 let selectedIcao = null; // null = no filter; set = show only this on radar
 
@@ -248,7 +258,7 @@ function playAlert() {
   }
 }
 
-// ----- Takeoff confirmation (altitude history + ground-origin latch) -----
+// ----- Vertical trend (altitude derived rate) -----
 // Append one altitude sample, keeping only the last ALT_HISTORY_SIZE readings.
 function recordAltitude(icao, altM, ts) {
   let history = altHistory.get(icao);
@@ -261,47 +271,37 @@ function recordAltitude(icao, altM, ts) {
   return history;
 }
 
-// True once the buffer is full and every consecutive step gained at least
-// ALT_CLIMB_MIN_M — i.e. a genuine sustained climb, not barometric noise.
-function sustainedClimb(history) {
-  if (history.length < ALT_HISTORY_SIZE) return false;
-  for (let i = 1; i < history.length; i++) {
-    if (history[i].alt - history[i - 1].alt < ALT_CLIMB_MIN_M) return false;
-  }
-  return true;
+// Vertical speed (m/s) derived from the oldest→newest sample in the window.
+// Returns null until there are two samples spanning a usable interval — the
+// only reliable way to know a plane is climbing/descending when the reported
+// rate field is zero or missing. Positive = climbing.
+function derivedRateMs(history) {
+  if (history.length < 2) return null;
+  const first = history[0];
+  const last = history[history.length - 1];
+  const dt = (last.ts - first.ts) / 1000;
+  if (dt <= 0) return null;
+  return (last.alt - first.alt) / dt;
 }
 
-// A plane that was on the ground is taking off, so it can never be "arriving".
-// Latch it as departing the moment it leaves the tarmac and hold that until it
-// has climbed clear of the airport zone — a sustained climb over the last
-// ALT_HISTORY_SIZE readings, beyond AIRPORT_RADIUS_KM — after which the backend
-// classification is trusted again.
-function takeoffAdjusted(ac, dist, now) {
-  const icao = ac.icao24;
-  const raw = ac.classification;
-  // A climbing aircraft has left the tarmac — a baro dip into the field band
-  // must not drop the latch and re-expose it as "ground"/"arriving".
-  const onGround =
-    ac.vertical_rate_fpm <= CLIMB_RATE_FPM &&
-    (ac.altitude_m <= 0 || raw === "ground");
-  const history = recordAltitude(icao, ac.altitude_m, now);
+// Classify an airborne aircraft from the altitude trend we actually observe,
+// rather than the reported rate. Ground comes from the ADS-B bit / backend
+// band; the reported rate is only a fallback for contacts too new to have a trend.
+function classifyByTrend(ac, now) {
+  const history = recordAltitude(ac.icao24, altM(ac), now);
+  if (isOnGround(ac)) return "ground";
+  if (altM(ac) > CRUISE_ALT_M) return "cruising"; // high en-route, ignore trend
 
-  if (onGround) {
-    departingLatch.delete(icao); // back on the ground; re-latches on next liftoff
-    return raw;
+  const rate = derivedRateMs(history);
+  if (rate === null) {
+    // Brand-new contact: fall back to the reported rate for one tick.
+    if (climbRateFpm(ac) > CLIMB_RATE_FPM) return "departing";
+    if (climbRateFpm(ac) < -CLIMB_RATE_FPM) return "arriving";
+    return ac.classification;
   }
-  // Just off the ground AND climbing → taking off. A descending aircraft that
-  // appears just-airborne is on approach, not departing, so it must not latch.
-  if (prevGround.get(icao) === true && ac.vertical_rate_fpm > CLIMB_RATE_FPM) {
-    departingLatch.add(icao);
-  }
-  if (!departingLatch.has(icao)) return raw;
-
-  if (dist > AIRPORT_RADIUS_KM && sustainedClimb(history)) {
-    departingLatch.delete(icao); // climbed clear of the field — trust the backend
-    return raw;
-  }
-  return raw === "arriving" ? "departing" : raw;
+  if (rate < -VERT_RATE_MS) return "arriving";
+  if (rate > VERT_RATE_MS) return "departing";
+  return "cruising"; // level → overflying/transit
 }
 
 // ----- Classification smoothing -----
@@ -339,34 +339,35 @@ function smoothClass(icao, raw, now) {
 }
 
 // ----- New-aircraft detection (sound + breathing card) -----
-// Ding whenever an arriving/departing aircraft that wasn't present in the
-// previous poll shows up — mock or live, foreground or background. If several
-// appear at once the farthest one wins (it just crossed into the scope); its
-// card breathes and scrolls into view so the sound has a clear visual anchor.
+// Ding whenever an aircraft *enters* an alert state (arriving/departing) — both
+// a brand-new contact that appears already arriving/departing AND one already on
+// the radar that transitions in (e.g. a plane that sat near the field as
+// ground and then climbs out as "taking off"). The alert keys off `_effective`
+// — the trend classification *before* display smoothing and the landed grace —
+// so a fast ground→departing isn't masked by either and goes unheard. Staying in
+// the state does not re-ding. If several enter at once the farthest one wins (it
+// just crossed into scope); its card breathes and scrolls into view as the anchor.
 function detectNewAircraft(list, now) {
-  let newestAc = null;
-  let newestDist = -1;
+  let alertAc = null;
+  let alertDist = -1;
   const present = new Set();
   for (const ac of list) {
     present.add(ac.icao24);
-    const isNew = !lastSeen.has(ac.icao24);
-    if (
-      isNew &&
-      !ac._landed &&
-      (ac.classification === "arriving" || ac.classification === "departing") &&
-      ac._dist > newestDist
-    ) {
-      newestAc = ac;
-      newestDist = ac._dist;
+    const eff = ac._effective;
+    const isAlertState = eff === "arriving" || eff === "departing";
+    if (isAlertState && alertedClass.get(ac.icao24) !== eff && ac._dist > alertDist) {
+      alertAc = ac;
+      alertDist = ac._dist;
     }
   }
-  // Remember exactly who is present now, for the next poll's comparison.
-  lastSeen.clear();
-  for (const id of present) lastSeen.add(id);
+  // Record this poll's trend state for everyone present (and drop the gone) so
+  // the next poll can detect a fresh transition rather than a sustained state.
+  for (const id of alertedClass.keys()) if (!present.has(id)) alertedClass.delete(id);
+  for (const ac of list) alertedClass.set(ac.icao24, ac._effective);
 
-  if (newestAc !== null) {
-    notified.set(newestAc.icao24, now + CARD_NOTICE_MS);
-    pendingScrollIcao = newestAc.icao24;
+  if (alertAc !== null) {
+    notified.set(alertAc.icao24, now + CARD_NOTICE_MS);
+    pendingScrollIcao = alertAc.icao24;
     playAlert();
   }
 }
@@ -412,34 +413,39 @@ async function fetchData() {
         ac.latitude,
         ac.longitude,
       );
-      const effective = takeoffAdjusted(ac, dist, now);
+      const effective = classifyByTrend(ac, now);
       const cls = smoothClass(ac.icao24, effective, now);
       return {
         ...ac,
         classification: cls,
+        // Trend classification before display smoothing/landed-grace masking.
+        // Alerts key off this so a fast ground→departing isn't swallowed by the
+        // 5 s smoothing or the landed grace.
+        _effective: effective,
         _dist: dist,
         _bearing: brg,
         _frac: dist / data.radius_km,
       };
     });
 
-    // Track landings: an aircraft we previously saw airborne and now see at 0 m
-    // just landed. Keep only currently-present aircraft in the tracking maps so
-    // a craft that disappears and reappears at 0 m isn't mistaken for a landing.
+    // Track landings: an aircraft we previously saw airborne and now on the
+    // ground just landed. Keep only currently-present aircraft in the tracking
+    // maps so a craft that disappears and reappears grounded isn't mistaken for
+    // a landing.
     const present = new Set();
     for (const ac of enriched) {
       present.add(ac.icao24);
-      // A climbing aircraft is taking off, not landing — never count it as
-      // on-ground, even if its baro altitude dips into the field-elevation band.
-      const climbing = ac.vertical_rate_fpm > CLIMB_RATE_FPM;
-      const onGround =
-        !climbing && (ac.altitude_m <= 0 || ac.classification === "ground");
+      // A departing aircraft is climbing out, not landing — never count it as
+      // on-ground, even if its altitude dips into the field band. "departing"
+      // now comes from the observed altitude trend, so it's reliable here.
+      const climbing = ac.classification === "departing";
+      const onGround = !climbing && isOnGround(ac);
       if (onGround) {
         if (prevGround.get(ac.icao24) === false) landedAt.set(ac.icao24, now);
-      } else if (climbing || ac.classification === "departing") {
+      } else if (climbing) {
         landedAt.delete(ac.icao24); // climbing out / confirmed takeoff — cancel grace
       }
-      // "arriving" at low altitude does NOT clear landedAt (baro noise on ground)
+      // "arriving" at low altitude does NOT clear landedAt (noise near the ground)
       prevGround.set(ac.icao24, onGround);
     }
     for (const id of prevGround.keys()) if (!present.has(id)) prevGround.delete(id);
@@ -447,17 +453,14 @@ async function fetchData() {
     for (const id of shownClass.keys()) if (!present.has(id)) shownClass.delete(id);
     for (const id of pendingClass.keys()) if (!present.has(id)) pendingClass.delete(id);
     for (const id of altHistory.keys()) if (!present.has(id)) altHistory.delete(id);
-    for (const id of departingLatch) if (!present.has(id)) departingLatch.delete(id);
 
     // Show airborne aircraft, plus grounded ones only within the landing grace.
-    // "Ground" means alt_m == 0 (ADS-B literal) OR backend classified as "ground"
-    // (barometric altitude within 50 m of airport elevation). Grounded-and-kept
-    // aircraft are tagged `_landed` for styling/sorting.
+    // "Ground" means the ADS-B air/ground bit is set OR the backend classified
+    // it as "ground" (geometric altitude within the calibrated field band).
+    // Grounded-and-kept aircraft are tagged `_landed` for styling/sorting.
     const list = [];
     for (const ac of enriched) {
-      const onGround =
-        ac.vertical_rate_fpm <= CLIMB_RATE_FPM &&
-        (ac.altitude_m <= 0 || ac.classification === "ground");
+      const onGround = isOnGround(ac);
       const t = landedAt.get(ac.icao24);
       const withinGrace = t !== undefined && now - t < LANDED_GRACE_MS;
 
