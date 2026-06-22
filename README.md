@@ -52,7 +52,7 @@ This software is an open-source technical experiment developed strictly for educ
 
 1. **Clone the repository**:
    ```bash
-   git clone [https://github.com/bgutsev/desk-flight-radar](https://github.com/bgutsev/desk-flight-radar)
+   git clone https://github.com/bgutsev/desk-flight-radar
    cd desk-flight-radar
    ```
 
