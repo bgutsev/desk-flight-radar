@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ ! -f .claude/pending-comment.txt ]; then echo '{\"continue\": false, \"stopReason\": \"Must call /log-intent before editing files. Example: /log-intent add README and requirements.txt for project setup\"}'; else echo '{\"continue\": true}'; fi"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|NotebookEdit",

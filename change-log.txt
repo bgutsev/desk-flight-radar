@@ -36,3 +36,5 @@
 2026-06-22 17:27:50 | Edit         | CLAUDE.md                                | +3 lines
 2026-06-22 17:28:05 | Edit         | change-log.txt                           | +1 lines
 2026-06-22 17:29:52 | Edit         | change-log.txt                           | demo: show how /log-intent writes meaningful comments to change-log.txt
+2026-06-22 17:54:50 | Edit         | README.md                                | +70 lines
+2026-06-22 18:01:17 | Edit         | .claude\settings.json                    | +11 lines
