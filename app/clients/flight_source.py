@@ -11,6 +11,7 @@ Defines the :class:`FlightSource` protocol plus two implementations:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Protocol, TypedDict, runtime_checkable
 
 import httpx
@@ -50,11 +51,105 @@ class FlightSource(Protocol):
     ) -> list[Aircraft]: ...
 
 
-class MockFlightSource:
-    """Returns two deterministic aircraft offset from the query center.
+# Takeoff mock cycle: the aircraft sits on the runway, then lifts off and
+# climbs out, looping forever so the ground→airborne transition (which the
+# frontend latches as "departing") can be observed repeatedly.
+_TAKEOFF_GROUND_S = 8.0  # seconds parked on the runway at the start of each cycle
+_TAKEOFF_CLIMB_S = 32.0  # seconds spent climbing out before the cycle restarts
+_TAKEOFF_PERIOD_S = _TAKEOFF_GROUND_S + _TAKEOFF_CLIMB_S
+_TAKEOFF_TOP_ALT_M = 3000.0  # altitude reached at the end of the climb
+_TAKEOFF_LON_SPREAD = 0.08  # degrees of eastward drift across the climb
 
-    The offsets place both aircraft ~9–13 km from the center so they survive a
-    typical radius filter.
+
+def _mock_takeoff(lat: float, lon: float, now: float) -> Aircraft:
+    """A single aircraft cycling through ground → liftoff → climb-out.
+
+    Phase is derived from wall-clock time so successive polls see it move, which
+    is what triggers the frontend's ground-origin "departing" latch (a static
+    snapshot could never exercise it). It starts on the runway at the center.
+    """
+    phase = now % _TAKEOFF_PERIOD_S
+    if phase < _TAKEOFF_GROUND_S:
+        # Parked on the runway: ADS-B "ground" → 0 m, no climb, taxi speed.
+        return Aircraft(
+            icao24="c0ffee",
+            callsign="TKO000",
+            type="A320",
+            latitude=lat,
+            longitude=lon,
+            altitude_m=0.0,
+            vertical_rate_fpm=0.0,
+            velocity_kmh=30,
+            heading_deg=90,
+        )
+    # Climbing out: altitude and eastward distance grow with progress.
+    progress = (phase - _TAKEOFF_GROUND_S) / _TAKEOFF_CLIMB_S
+    return Aircraft(
+        icao24="c0ffee",
+        callsign="TKO000",
+        type="A320",
+        latitude=lat,
+        longitude=lon + progress * _TAKEOFF_LON_SPREAD,
+        altitude_m=progress * _TAKEOFF_TOP_ALT_M,
+        vertical_rate_fpm=2000,  # climbing → departing
+        velocity_kmh=150 + progress * 250,
+        heading_deg=90,
+    )
+
+
+# Landing mock cycle: the mirror of the takeoff — the aircraft descends on
+# approach from the west, touches down, sits briefly, then loops back out to a
+# fresh approach so the airborne→ground (landing) transition can be observed.
+_LANDING_APPROACH_S = 32.0  # seconds descending on approach toward the field
+_LANDING_GROUND_S = 8.0  # seconds parked after touchdown before the cycle restarts
+_LANDING_PERIOD_S = _LANDING_APPROACH_S + _LANDING_GROUND_S
+_LANDING_TOP_ALT_M = 3000.0  # altitude at the start of the approach
+_LANDING_LON_SPREAD = 0.08  # degrees of westward offset at the start of the approach
+
+
+def _mock_landing(lat: float, lon: float, now: float) -> Aircraft:
+    """A single aircraft cycling through approach → touchdown → parked.
+
+    The time-driven mirror of :func:`_mock_takeoff`: it descends toward the
+    center, lands, then restarts, so the landing transition can be tested.
+    """
+    phase = now % _LANDING_PERIOD_S
+    if phase >= _LANDING_APPROACH_S:
+        # Parked on the runway after landing: ADS-B "ground" → 0 m, taxi speed.
+        return Aircraft(
+            icao24="1a4d09",
+            callsign="LND999",
+            type="B738",
+            latitude=lat,
+            longitude=lon,
+            altitude_m=0.0,
+            vertical_rate_fpm=0.0,
+            velocity_kmh=30,
+            heading_deg=90,
+        )
+    # On approach: altitude and westward distance shrink as the plane nears the
+    # field. ``remaining`` is 1 at the start of the approach and 0 at touchdown.
+    remaining = 1.0 - phase / _LANDING_APPROACH_S
+    return Aircraft(
+        icao24="1a4d09",
+        callsign="LND999",
+        type="B738",
+        latitude=lat,
+        longitude=lon - remaining * _LANDING_LON_SPREAD,
+        altitude_m=remaining * _LANDING_TOP_ALT_M,
+        vertical_rate_fpm=-1500,  # descending → arriving
+        velocity_kmh=160 + remaining * 200,
+        heading_deg=90,  # heading east toward the field from the west
+    )
+
+
+class MockFlightSource:
+    """Returns deterministic aircraft offset from the query center.
+
+    Two aircraft (an arrival and a departure) sit ~9–13 km out so they survive a
+    typical radius filter, plus two time-driven aircraft that cycle through a
+    takeoff (ground → liftoff → climb-out) and a landing (approach → touchdown →
+    parked) so both transitions can be tested in mock mode.
     """
 
     def get_states(self, lat: float, lon: float, radius_km: float) -> list[Aircraft]:
@@ -81,6 +176,8 @@ class MockFlightSource:
                 velocity_kmh=410,
                 heading_deg=244,
             ),
+            _mock_takeoff(lat, lon, time.monotonic()),
+            _mock_landing(lat, lon, time.monotonic()),
         ]
 
 

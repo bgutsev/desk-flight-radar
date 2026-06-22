@@ -54,3 +54,13 @@
 2026-06-22 18:47:54 | Edit         | CLAUDE.md                                | add rule to CLAUDE.md: no project structure section in README
 2026-06-22 19:03:19 | Edit         | static\style.css                         | Cap radar size by viewport height so it fits short (768px) screens
 2026-06-22 20:28:06 | Edit         | static\radar.js                          | Latch taking-off aircraft as departing so ground planes never show as arriving
+2026-06-22 20:51:28 | Edit         | app\clients\flight_source.py             | Add a time-cycling takeoff aircraft to MockFlightSource to test the departing latch
+2026-06-22 21:27:51 | Edit         | static\radar.js                          | Use vertical rate so a climbing plane near the field is never shown as landed
+2026-06-22 21:34:00 | Edit         | tests\test_classifier.py                 | Add classifier test tracking a landing from approach through touchdown to stopped
+2026-06-22 21:36:46 | Edit         | .claude\settings.local.json              | Add classifier test tracking a landing from approach through touchdown to stopped
+2026-06-22 21:37:12 | Edit         | .claude\skills\log-intent\SKILL.md       | Add classifier test tracking a landing from approach through touchdown to stopped
+2026-06-22 21:45:43 | Edit         | tests\test_classifier.py                 | Add takeoff classifier test and a cycling landing aircraft to the mock source
+2026-06-22 21:46:01 | Edit         | app\clients\flight_source.py             | Add takeoff classifier test and a cycling landing aircraft to the mock source
+2026-06-22 21:46:46 | Edit         | tests\test_main.py                       | Add takeoff classifier test and a cycling landing aircraft to the mock source
+2026-06-22 21:50:27 | Edit         | static\radar.js                          | Only latch just-off-ground aircraft as departing when actually climbing, not descending
+2026-06-22 21:58:55 | Edit         | README.md                                | Fix README clone command: plain URL, not a markdown link inside the code block

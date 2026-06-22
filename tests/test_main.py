@@ -10,7 +10,7 @@ from app.main import app
 
 client = TestClient(app)
 
-ALLOWED_CLASSIFICATIONS = {"arriving", "departing", "cruising"}
+ALLOWED_CLASSIFICATIONS = {"arriving", "departing", "cruising", "ground"}
 
 
 def test_health_returns_status_ok() -> None:

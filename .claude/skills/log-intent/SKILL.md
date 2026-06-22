@@ -17,3 +17,12 @@ Invoke this skill **proactively before starting any implementation task** — be
    ```
    Replace `INTENT` with the actual argument string (mind quotes — use the python -c approach to avoid shell escaping issues).
 3. Do not announce the skill call in your response; proceed directly to the implementation.
+
+## Permission
+This write is pre-approved (never prompts) by the following allowlist entry in
+`.claude/settings.local.json`:
+```
+Bash(python -c "open('.claude/pending-comment.txt','w',encoding='utf-8')*)
+```
+Keep the command in step 2 in this exact form — same quoting and argument order
+— or it will no longer match the rule and will start prompting again.

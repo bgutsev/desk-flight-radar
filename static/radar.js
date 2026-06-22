@@ -42,6 +42,12 @@ const ALT_HISTORY_SIZE = 3;
 // as a genuine climb. Filters out barometric noise (~±5 m).
 const ALT_CLIMB_MIN_M = 10.0;
 
+// Vertical rate (ft/min) above which an aircraft is climbing — mirrors the
+// backend's CLIMB_THRESHOLD_FPM. A climbing aircraft is taking off, so it is
+// never treated as on-ground/landed even when its barometric altitude briefly
+// reads within the field-elevation ground band.
+const CLIMB_RATE_FPM = 200.0;
+
 // ----- Geo helpers (mirror app/utils/geo.py) -----
 const R_EARTH_KM = 6371.0088;
 const toRad = (d) => (d * Math.PI) / 180;
@@ -273,14 +279,22 @@ function sustainedClimb(history) {
 function takeoffAdjusted(ac, dist, now) {
   const icao = ac.icao24;
   const raw = ac.classification;
-  const onGround = ac.altitude_m <= 0 || raw === "ground";
+  // A climbing aircraft has left the tarmac — a baro dip into the field band
+  // must not drop the latch and re-expose it as "ground"/"arriving".
+  const onGround =
+    ac.vertical_rate_fpm <= CLIMB_RATE_FPM &&
+    (ac.altitude_m <= 0 || raw === "ground");
   const history = recordAltitude(icao, ac.altitude_m, now);
 
   if (onGround) {
     departingLatch.delete(icao); // back on the ground; re-latches on next liftoff
     return raw;
   }
-  if (prevGround.get(icao) === true) departingLatch.add(icao); // just lifted off
+  // Just off the ground AND climbing → taking off. A descending aircraft that
+  // appears just-airborne is on approach, not departing, so it must not latch.
+  if (prevGround.get(icao) === true && ac.vertical_rate_fpm > CLIMB_RATE_FPM) {
+    departingLatch.add(icao);
+  }
   if (!departingLatch.has(icao)) return raw;
 
   if (dist > AIRPORT_RADIUS_KM && sustainedClimb(history)) {
@@ -415,11 +429,15 @@ async function fetchData() {
     const present = new Set();
     for (const ac of enriched) {
       present.add(ac.icao24);
-      const onGround = ac.altitude_m <= 0 || ac.classification === "ground";
+      // A climbing aircraft is taking off, not landing — never count it as
+      // on-ground, even if its baro altitude dips into the field-elevation band.
+      const climbing = ac.vertical_rate_fpm > CLIMB_RATE_FPM;
+      const onGround =
+        !climbing && (ac.altitude_m <= 0 || ac.classification === "ground");
       if (onGround) {
         if (prevGround.get(ac.icao24) === false) landedAt.set(ac.icao24, now);
-      } else if (ac.classification === "departing") {
-        landedAt.delete(ac.icao24); // confirmed takeoff — cancel grace period
+      } else if (climbing || ac.classification === "departing") {
+        landedAt.delete(ac.icao24); // climbing out / confirmed takeoff — cancel grace
       }
       // "arriving" at low altitude does NOT clear landedAt (baro noise on ground)
       prevGround.set(ac.icao24, onGround);
@@ -437,7 +455,9 @@ async function fetchData() {
     // aircraft are tagged `_landed` for styling/sorting.
     const list = [];
     for (const ac of enriched) {
-      const onGround = ac.altitude_m <= 0 || ac.classification === "ground";
+      const onGround =
+        ac.vertical_rate_fpm <= CLIMB_RATE_FPM &&
+        (ac.altitude_m <= 0 || ac.classification === "ground");
       const t = landedAt.get(ac.icao24);
       const withinGrace = t !== undefined && now - t < LANDED_GRACE_MS;
 
