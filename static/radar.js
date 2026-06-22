@@ -439,20 +439,26 @@ async function fetchPhoto(ac) {
 }
 
 // ----- Route (origin/destination) -----
+// Format an airport as "City (CODE) / Country", e.g. "Sofia (SOF) / Bulgaria".
+// Falls back to "N/A" when the route/airport data is unavailable.
 function airportText(ap) {
-  const place = [ap.country, ap.city, ap.airport].filter(Boolean).join(" / ");
-  return ap.code ? `${place} (${ap.code})` : place;
+  if (!ap) return "N/A";
+  const city = ap.city || "";
+  const code = ap.code || "";
+  const country = ap.country || "";
+  const head = city && code ? `${city} (${code})` : city || code;
+  const text = [head, country].filter(Boolean).join(" / ");
+  return text || "N/A";
 }
 
+// Always show From/To (N/A when missing) so the layout is consistent.
 function routeHtml(ac) {
-  let lines = "";
-  if (ac.origin) {
-    lines += `<div class="route-line">From: ${airportText(ac.origin)}</div>`;
-  }
-  if (ac.destination) {
-    lines += `<div class="route-line">To: ${airportText(ac.destination)}</div>`;
-  }
-  return lines ? `<div class="route">${lines}</div>` : "";
+  return (
+    `<div class="route">` +
+    `<div class="route-line">From: ${airportText(ac.origin)}</div>` +
+    `<div class="route-line">To: ${airportText(ac.destination)}</div>` +
+    `</div>`
+  );
 }
 
 // ----- Selection: toggle a single aircraft filter -----

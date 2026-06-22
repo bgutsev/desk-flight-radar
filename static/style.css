@@ -365,9 +365,9 @@ h1 {
 
 .card-top {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
 }
 
 .card .callsign {
@@ -386,14 +386,13 @@ h1 {
   font-size: 15px;
 }
 
+/* Status sits inline next to the flight number, matching its height. */
 .card .badge {
   flex-shrink: 0;
-  font-size: 21px;
+  font-size: 18px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.06);
+  margin-left: 75px;
 }
 .card.arriving .badge {
   color: var(--green);

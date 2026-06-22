@@ -159,6 +159,29 @@ def _adsbdb_airport(ap: dict) -> Airport:
     }
 
 
+def _with_cities(
+    route: dict[str, Airport], source: dict[str, Airport] | None
+) -> dict[str, Airport]:
+    """Backfill each endpoint's city from ``source`` (matched by airport code).
+
+    hexdb only exposes the region/province (e.g. "Mazowieckie"), not the city,
+    so the real city ("Warsaw") is copied in from adsbdb's municipality where the
+    two sources agree on the airport. New dicts are returned — the shared airport
+    cache is not mutated.
+    """
+    if not source:
+        return route
+    cities = {
+        ep["code"]: ep["city"]
+        for ep in source.values()
+        if ep.get("code") and ep.get("city")
+    }
+    return {
+        side: {**ep, "city": cities.get(ep.get("code", "")) or ep.get("city", "")}
+        for side, ep in route.items()
+    }
+
+
 @runtime_checkable
 class EnrichmentClient(Protocol):
     """Anything that augments an aircraft record with metadata."""
@@ -285,6 +308,10 @@ class HexDbEnrichment:
         route = self._hexdb_route(callsign)
         if route is None:
             route = self._adsbdb_route(callsign)
+        else:
+            # hexdb gives the province, not the city — backfill the real city
+            # from adsbdb's municipality where the airports match by code.
+            route = _with_cities(route, self._adsbdb_route(callsign))
 
         _route_cache[callsign] = route
         return route

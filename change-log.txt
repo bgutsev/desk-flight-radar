@@ -1,0 +1,3 @@
+# Change log — one line per file edit, appended automatically by .claude/log-change.py
+# Format: TIMESTAMP | TOOL | FILE
+2026-06-22 15:20:42 | Edit         | change-log.txt

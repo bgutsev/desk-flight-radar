@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "python -m ruff format . && python -m ruff check ."
+          },
+          {
+            "type": "command",
+            "command": "python .claude/log-change.py"
           }
         ]
       }
