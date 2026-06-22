@@ -29,14 +29,14 @@ APPROACH_HALF_ANGLE_DEG = 90.0
 
 # Barometric altitude may be within this many metres of the airport elevation
 # while the aircraft is still on the ground or just rolling.
-GROUND_TOLERANCE_M = 100.0
+GROUND_TOLERANCE_M = 10.0
 
 
 def classify(
     aircraft: Mapping[str, object],
     center_lat: float,
     center_lon: float,
-    center_alt_m: float = 531.0,
+    center_alt_m: float = 465.0,
 ) -> Classification:
     """Return the arrival/departure/ground state of ``aircraft`` w.r.t. the center."""
 
