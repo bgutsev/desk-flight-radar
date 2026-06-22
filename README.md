@@ -8,7 +8,7 @@ A real-time flight tracking application that combines a robust backend data pipe
 - **Comprehensive Flight Data**: Dual-pane UI displaying real-time telemetry, enriched route data (origin/destination), and aircraft thumbnails
 - **Resilient Data Pipeline**: Built-in fault tolerance with in-memory caching to seamlessly handle upstream 502 errors from external data providers
 - **Customizable & Persistent UI**: User preferences saved via localStorage, with base configurations managed through `static/config.js`
-- **Ground Classification**: Intelligent filtering of airport vehicles and tarmac aircraft to keep radar clean
+- **Ground Classification**: Suppresses tarmac aircraft and ground vehicles near the airport using altitude trend analysis and proximity gating
 - **Offline Mode**: Mock data support for grading and demonstrations without live data sources
 
 ## 🛠️ Tech Stack & Architecture
@@ -72,30 +72,6 @@ A real-time flight tracking application that combines a robust backend data pipe
 - **Lint code**: `ruff check .`
 - **Auto-format**: `ruff format .`
 
-## 📁 Project Structure
-
-```
-.
-├── app/                          # Backend application
-│   ├── __init__.py
-│   ├── main.py                  # FastAPI app entry point
-│   ├── config.py                # Configuration
-│   ├── classifier.py            # Ground classification logic
-│   ├── clients/                 # External data clients
-│   │   ├── flight_source.py    # ADS-B data fetching
-│   │   └── enrichment.py       # Route enrichment
-│   └── utils/                   # Utility modules
-│       └── geo.py              # Geographic calculations
-├── static/                       # Frontend assets
-│   ├── index.html              # Main radar page
-│   ├── config.js               # Frontend configuration
-│   └── styles.css              # Radar styling
-├── tests/                        # Test suite
-├── requirements.txt              # Python dependencies
-├── pytest.ini                    # Pytest configuration
-├── CLAUDE.md                     # Project conventions
-└── README.md                     # This file
-```
 
 ### Technical & Project Challenges
 
@@ -103,7 +79,7 @@ A real-time flight tracking application that combines a robust backend data pipe
 
 **UI/UX Requirement Alignment**: Managing inconsistencies between AI-generated frontend outputs and specific UI/UX requirements required continuous iterative prompting to align the visual layout and data presentation exactly with the intended vision.
 
-**Ground Classification**: Implemented intelligent filtering to suppress airport vehicles and tarmac aircraft, preventing clutter on the radar display while maintaining real flight data visibility.
+**Ground Classification**: Distinguishing real aircraft from ground vehicles and parked planes required combining barometric altitude, vertical rate, and proximity to the airport. The solution uses per-aircraft altitude history across multiple ADS-B readings to confirm genuine takeoffs before showing an aircraft on radar.
 
 ## 📝 Requirements
 

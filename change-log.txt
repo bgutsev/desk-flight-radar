@@ -50,3 +50,5 @@
 2026-06-22 18:38:44 | Edit         | .claude\log-change.py                    | fix log-change to persist intent across edits and drop heuristic fallback
 2026-06-22 18:42:03 | Write        | .claude\log-change.py                    | deduplicate change-log entries by skipping repeated file+comment pairs
 2026-06-22 18:42:10 | Edit         | .gitignore                               | deduplicate change-log entries by skipping repeated file+comment pairs
+2026-06-22 18:46:41 | Edit         | README.md                                | fix README inaccuracies: wrong css filename, missing radar.js, overstated features
+2026-06-22 18:47:54 | Edit         | CLAUDE.md                                | add rule to CLAUDE.md: no project structure section in README

@@ -21,5 +21,8 @@
 - Auto-format code: `ruff format .`
 - Run tests: `pytest -v`
 
+## Documentation Rules
+- Do NOT include a project structure / file tree section in README.md.
+
 ## Change Logging
 Before the first Edit or Write of any implementation task (bug fix, feature, refactor), invoke the `/log-intent` skill with a single sentence describing what is being changed and why (max 80 chars). One call per task — not per file. This intent is stored in `.claude/pending-comment.txt` and automatically picked up by the PostToolUse hook into `change-log.txt`.
