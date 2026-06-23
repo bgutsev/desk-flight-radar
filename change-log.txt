@@ -75,3 +75,19 @@
 2026-06-22 22:42:03 | Edit         | app\main.py                              | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
 2026-06-22 22:42:37 | Write        | tests\test_classifier.py                 | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
 2026-06-22 22:43:19 | Edit         | static\radar.js                          | Use ADS-B ground bit + geom altitude + auto-calibrated field elevation for classification
+2026-06-23 22:50:44 | Edit         | static\radar.js                          | Dedupe alerts: ding each aircraft once per radar presence, not per state change
+2026-06-23 23:02:49 | Edit         | app\clients\enrichment.py                | Card layout: fixed state column, altitude on line 1, full aircraft name, greener speed
+2026-06-23 23:03:40 | Edit         | static\radar.js                          | Card layout: fixed state column, altitude on line 1, full aircraft name, greener speed
+2026-06-23 23:04:15 | Edit         | static\style.css                         | Card layout: fixed state column, altitude on line 1, full aircraft name, greener speed
+2026-06-23 23:12:32 | Edit         | static\style.css                         | Trim radar-side right padding so the panel sits closer to the radar device
+2026-06-23 23:19:49 | Edit         | static\style.css                         | Clip dead right margin of off-center radar PNG so left/right gaps match
+2026-06-23 23:22:14 | Edit         | static\style.css                         | Correct radar clip width so left/right black gaps are actually equal
+2026-06-23 23:32:12 | Edit         | static\style.css                         | Lay out controls on one row with Update at right; accent Radius; tidy toggles
+2026-06-23 23:38:54 | Edit         | app\clients\enrichment.py                | Keep short type on radar; add type_full for the card so radar stays compact
+2026-06-23 23:39:19 | Edit         | static\radar.js                          | Keep short type on radar; add type_full for the card so radar stays compact
+2026-06-23 23:57:17 | Edit         | static\index.html                        | Add optional static GPS marker; compact controls; restyle compass/ring distance labels
+2026-06-23 23:57:32 | Edit         | static\style.css                         | Add optional static GPS marker; compact controls; restyle compass/ring distance labels
+2026-06-23 23:57:48 | Edit         | static\radar.js                          | Add optional static GPS marker; compact controls; restyle compass/ring distance labels
+2026-06-24 00:22:13 | Edit         | static\index.html                        | Controls polish: no coord spinners, round coords to 5dp, realign buttons/toggles, bigger status
+2026-06-24 00:22:30 | Edit         | static\style.css                         | Controls polish: no coord spinners, round coords to 5dp, realign buttons/toggles, bigger status
+2026-06-24 00:23:25 | Edit         | static\radar.js                          | Controls polish: no coord spinners, round coords to 5dp, realign buttons/toggles, bigger status

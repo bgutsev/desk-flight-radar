@@ -149,6 +149,20 @@ _COUNTRY_NAMES: dict[str, str] = {
 }
 
 
+def _full_type_name(manufacturer: object, model: str) -> str:
+    """Compose a human-friendly aircraft name from manufacturer + model.
+
+    The manufacturer is prefixed only when present and the model doesn't already
+    start with it, so "Airbus" + "A320 214" -> "Airbus A320 214" but "Boeing" +
+    "Boeing 737" stays "Boeing 737".
+    """
+    model = model.strip()
+    mfr = str(manufacturer or "").strip()
+    if mfr and not model.lower().startswith(mfr.lower()):
+        return f"{mfr} {model}"
+    return model
+
+
 def _adsbdb_airport(ap: dict) -> Airport:
     """Map an adsbdb airport object to {country, city, airport, code}."""
     return {
@@ -193,13 +207,24 @@ class EnrichmentClient(Protocol):
 _MOCK_METADATA: dict[str, dict[str, str]] = {
     "4b1805": {
         "registration": "HB-JCA",
-        "type": "Airbus A220-300",
+        "type_full": "Airbus A220-300",
         "operator": "Swiss",
     },
     "a1b2c3": {
         "registration": "D-AIMA",
-        "type": "Airbus A380-800",
+        "type_full": "Airbus A380-800",
         "operator": "Lufthansa",
+    },
+    # The two time-driven mocks (takeoff/landing) so they also show a full name.
+    "c0ffee": {
+        "registration": "EI-DKL",
+        "type_full": "Airbus A320-200",
+        "operator": "Ryanair",
+    },
+    "1a4d09": {
+        "registration": "G-TUIA",
+        "type_full": "Boeing 737-800",
+        "operator": "TUI Airways",
     },
 }
 
@@ -284,7 +309,13 @@ class HexDbEnrichment:
                 if body.get("Registration"):
                     meta["registration"] = body["Registration"]
                 if body.get("Type"):
-                    meta["type"] = body["Type"]
+                    # Full aircraft name (manufacturer + model) for the card, kept
+                    # separate from the short ICAO ``type`` code shown on the radar.
+                    # hexdb's ``Type`` is just the model ("A320 214"), so the
+                    # manufacturer is prefixed unless the model already starts with it.
+                    meta["type_full"] = _full_type_name(
+                        body.get("Manufacturer"), body["Type"]
+                    )
                 if body.get("RegisteredOwners"):
                     meta["operator"] = body["RegisteredOwners"]
         except (httpx.HTTPError, ValueError) as exc:
