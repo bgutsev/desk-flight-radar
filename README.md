@@ -1,5 +1,6 @@
 # ADS-B Radar Tracker
 
+(System for early alert B.G.G. Alert 🙂)
 A real-time flight tracking application that combines a robust backend data pipeline with a high-performance, hardware-inspired frontend. The project fetches live, unencrypted public ADS-B data and visualizes it through an authentic 60fps Canvas-based Plan Position Indicator (PPI) radar display.
 
 The Project is inspired by an actual physical DYI model: https://makerworld.com/en/models/2872376-esp32-plane-radar-live-ads-b-on-a-round-display
