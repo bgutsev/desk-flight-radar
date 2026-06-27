@@ -91,3 +91,5 @@
 2026-06-24 00:22:13 | Edit         | static\index.html                        | Controls polish: no coord spinners, round coords to 5dp, realign buttons/toggles, bigger status
 2026-06-24 00:22:30 | Edit         | static\style.css                         | Controls polish: no coord spinners, round coords to 5dp, realign buttons/toggles, bigger status
 2026-06-24 00:23:25 | Edit         | static\radar.js                          | Controls polish: no coord spinners, round coords to 5dp, realign buttons/toggles, bigger status
+2026-06-25 21:55:19 | Edit         | static\config.js                         | Update default center longitude to 23.4167
+2026-06-25 21:55:25 | Edit         | static\radar.js                          | Update default center longitude to 23.4167
