@@ -10,7 +10,7 @@
 window.RADAR_CONFIG = {
   // Default map centre — Sofia Airport (LBSF / SOF). Used only on first visit.
   DEFAULT_LAT: 42.6967,
-  DEFAULT_LON: 23.4114,
+  DEFAULT_LON: 23.4167,
   DEFAULT_RADIUS_KM: 25,
 
   // How often the aircraft list is refreshed, in milliseconds.

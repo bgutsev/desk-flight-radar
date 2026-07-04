@@ -31,20 +31,28 @@ main {
 
 /* ---------- LEFT: radar device ---------- */
 .radar-side {
+  /* Shared stage size (see .radar-stage). 25% reduction from 1064 -> 798,
+     also capped by viewport height (minus 48px vertical padding) so the square
+     radar fits short screens, e.g. 768px laptops, without overflow. */
+  --stage: min(798px, 92vw, calc(100vh - 48px));
   flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
-  justify-content: center;
-  padding: 24px 16px;
+  justify-content: flex-start;
+  /* The console sits left-of-center in its square PNG (~6.8% transparent margin
+     on the left vs ~11.7% on the right). Clip the dead right strip via
+     overflow:hidden so the panel sits the same distance from the radar on both
+     sides. Width = (console-left + console-right edge fractions = 0.951) * stage
+     + 32px: 16px is the left padding and the other 16px mirrors it on the right
+     so the black gap matches the left exactly. */
+  width: calc(var(--stage) * 0.951 + 32px);
+  padding: 24px 0 24px 16px;
   overflow: hidden;
 }
 
-/* 25% reduction from 1064: 1064 * 0.75 = 798.
-   Also cap by viewport height (minus the 48px vertical padding) so the
-   square radar fits short screens, e.g. 768px laptops, without overflow. */
 .radar-stage {
   position: relative;
-  width: min(798px, 92vw, calc(100vh - 48px));
+  width: var(--stage);
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
 }
@@ -98,7 +106,8 @@ h1 {
   text-shadow: 0 0 8px rgba(0, 255, 102, 0.5);
 }
 
-/* Data-link status dot — dim when healthy, blinking red on error */
+/* Data-link status dot. Healthy: solid green, steady. Server error: red,
+   blinking, red text. No data: green dot + amber "NO DATA", breathing in sync. */
 #data-status {
   display: flex;
   align-items: center;
@@ -108,29 +117,39 @@ h1 {
 #data-status .dot {
   width: 14px;
   height: 14px;
+  margin-left: 10px; /* nudged right of the title */
   border-radius: 50%;
-  background: #3a0d0d;
-  opacity: 0.35;
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(0, 255, 102, 0.55);
 }
 
 #data-status .msg {
   display: none;
-  color: #ff6b6b;
   font-size: 13px;
   font-weight: bold;
   letter-spacing: 1px;
   white-space: nowrap;
 }
 
-#data-status.alert .dot {
+/* Server error */
+#data-status.error .dot {
   background: #ff2a2a;
-  opacity: 1;
   box-shadow: 0 0 10px 2px rgba(255, 40, 40, 0.85);
   animation: blink 1s steps(1, end) infinite;
 }
-
-#data-status.alert .msg {
+#data-status.error .msg {
   display: block;
+  color: #ff6b6b;
+}
+
+/* No data — dot and text breathe together (same animation, started in sync) */
+#data-status.nodata .dot {
+  animation: breathe 2s ease-in-out infinite;
+}
+#data-status.nodata .msg {
+  display: block;
+  color: var(--amber);
+  animation: breathe 2s ease-in-out infinite;
 }
 
 @keyframes blink {
@@ -139,54 +158,129 @@ h1 {
   }
 }
 
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 /* Controls */
+/* Aligned grid, columns pack left so each button sits right next to its fields:
+     row 1  LAT       LON       RADIUS   [UPDATE]
+     row 2  ◆ REF LAT ◆ REF LON [CLEAR]  [LIVE | ALERTS]
+   Ref coords align under the main ones; the toggles share the reference row. */
 .controls {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: auto auto auto auto;
+  justify-content: start;
+  gap: 10px 14px;
   align-items: end;
+}
+
+/* Hide the number spinners on all control fields. */
+.controls input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.controls input[type="number"]::-webkit-outer-spin-button,
+.controls input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .controls label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 14px;
+  gap: 3px;
+  font-size: 11px;
   color: var(--green-dim);
   text-transform: uppercase;
+  flex: 0 0 auto;
 }
 
 .controls input[type="number"] {
   background: #060a08;
   border: 1px solid #1d3327;
   color: var(--green);
-  padding: 8px;
+  height: 30px;
+  padding: 0 8px;
   font-family: inherit;
-  font-size: 16px;
+  font-size: 13px;
   border-radius: 3px;
+  width: 78px;
+}
+
+/* Radius — subtle green border accent (same size as lat/lon, no glow halo). */
+#radius {
+  width: 72px;
+  border-color: var(--green-dim);
+}
+
+.controls input[type="number"]:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 6px rgba(0, 255, 102, 0.3);
+}
+
+/* Reference-marker labels — amber, matching the radar marker. */
+.controls label.ref {
+  color: var(--amber);
 }
 
 .controls #update-btn {
   align-self: end;
-  justify-self: start;
+  justify-self: start; /* hug the text instead of stretching to the column */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--green);
   color: #04150b;
-  border: none;
-  padding: 7px 14px;
+  /* Explicit height + horizontal-only padding so it matches the input boxes
+     exactly (a <button> otherwise renders taller than an <input>). */
+  height: 30px;
+  border: 1px solid transparent;
+  padding: 0 10px;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: bold;
   letter-spacing: 1px;
   cursor: pointer;
   border-radius: 3px;
 }
 
+#mark-clear {
+  align-self: end;
+  justify-self: start; /* hug the glyph instead of stretching to the column */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #1d3327;
+  color: var(--green-dim);
+  font-family: inherit;
+  font-size: 13px;
+  height: 30px; /* match the inputs / #update-btn exactly */
+  padding: 0 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+#mark-clear:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
 .controls #update-btn:hover {
   background: #4dff96;
 }
 
+/* Toggles share the reference-coordinate row (last grid cell). */
 .mock-switch {
-  grid-column: 1 / -1;
+  align-self: end;
   display: flex;
   align-items: center;
   gap: 0;
@@ -195,16 +289,16 @@ h1 {
 .switch-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
-/* Sound toggle sits a fixed 50px to the right of the live/mock group. */
+/* Sound toggle sits a fixed gap to the right of the live/mock group. */
 .sound-group {
-  margin-left: 50px;
+  margin-left: 22px;
 }
 
 .switch-label {
-  font-size: 14px;
+  font-size: 11px;
   font-weight: bold;
   letter-spacing: 1px;
   color: var(--green);
@@ -213,10 +307,15 @@ h1 {
 .sound-icon {
   display: inline-flex;
   align-items: center;
-  margin-left: 6px;
+  margin-left: 4px;
   vertical-align: middle;
   color: #ffffff;
   transition: color 0.15s ease;
+}
+
+.sound-icon svg {
+  width: 12px;
+  height: 12px;
 }
 
 .sound-icon.muted {
@@ -225,11 +324,11 @@ h1 {
 
 .switch {
   position: relative;
-  width: 42px;
-  height: 22px;
+  width: 32px;
+  height: 18px;
   padding: 0;
   border: 1px solid #2a4a38;
-  border-radius: 11px;
+  border-radius: 9px;
   background: #14241b;
   cursor: pointer;
   transition: background 0.15s ease;
@@ -239,8 +338,8 @@ h1 {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--green);
   transition:
@@ -267,7 +366,7 @@ h1 {
 }
 
 #mock-toggle.live-on .knob {
-  transform: translateX(20px);
+  transform: translateX(14px);
   background: var(--green);
 }
 
@@ -278,14 +377,14 @@ h1 {
 }
 
 #sound-toggle.sound-on .knob {
-  transform: translateX(20px);
+  transform: translateX(14px);
   background: var(--green);
 }
 
 .status {
-  font-size: 14px;
-  color: var(--green-dim);
-  min-height: 16px;
+  font-size: 15px;
+  color: rgba(0, 255, 102, 0.78);
+  min-height: 18px;
 }
 
 /* Aircraft cards — no max-height; the panel itself scrolls */
@@ -329,6 +428,7 @@ h1 {
 }
 .card.landed .type,
 .card.landed .alt,
+.card.landed .speed,
 .card.landed .route-line,
 .card.landed .meta {
   color: #6b7280;
@@ -389,15 +489,20 @@ h1 {
 
 .card-top {
   display: flex;
-  justify-content: flex-start;
   align-items: baseline;
-  gap: 10px;
+  gap: 0;
 }
 
+/* Fixed-width column so the state text begins at the same x on every card,
+   regardless of how long the callsign is. */
 .card .callsign {
+  flex: 0 0 130px;
   font-size: 18px;
   font-weight: bold;
   color: #ffffff;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .card .type {
@@ -406,17 +511,27 @@ h1 {
 }
 
 .card .alt {
+  flex: 0 0 auto;
+  margin-left: 15px; /* fixed 15px gap after the reserved state column */
   color: var(--green);
   font-size: 15px;
 }
 
-/* Status sits inline next to the flight number, matching its height. */
+/* Make the speed pop the same green as the altitude. */
+.card .speed {
+  color: var(--green);
+}
+
+/* Status sits inline next to the flight number, matching its height. The state
+   occupies a fixed-width column (sized for the longest label, "TAKING OFF") so
+   the altitude after it never shifts, whether or not that label is showing.
+   The negative margin nudges the whole state text 10px to the left. */
 .card .badge {
-  flex-shrink: 0;
+  flex: 0 0 12ch;
+  margin-left: -10px;
   font-size: 18px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  margin-left: 75px;
 }
 .card.arriving .badge {
   color: var(--green);

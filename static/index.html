@@ -50,17 +50,31 @@
         <form id="controls" class="controls" autocomplete="off">
           <label>
             Lat
-            <input id="lat" type="number" step="0.0001" min="-90" max="90" value="42.6967" />
+            <input id="lat" class="coord" type="number" step="any" min="-90" max="90" value="42.6967" />
           </label>
           <label>
             Lon
-            <input id="lon" type="number" step="0.0001" min="-180" max="180" value="23.4114" />
+            <input id="lon" class="coord" type="number" step="any" min="-180" max="180" value="23.4114" />
           </label>
           <label>
             Radius (km)
             <input id="radius" type="number" step="1" min="1" max="500" value="25" />
           </label>
           <button type="submit" id="update-btn">Update</button>
+
+          <!-- Optional static reference point plotted on the radar. Aligned
+               directly under the main coordinates; the diamond matches the
+               radar marker. -->
+          <label class="ref">
+            &#9670; Ref Lat
+            <input id="mark-lat" class="coord" type="number" step="any" min="-90" max="90" placeholder="—" />
+          </label>
+          <label class="ref">
+            &#9670; Ref Lon
+            <input id="mark-lon" class="coord" type="number" step="any" min="-180" max="180" placeholder="—" />
+          </label>
+          <button type="button" id="mark-clear" title="Clear reference marker">&#10005;</button>
+
           <div class="mock-switch">
             <div class="switch-group">
               <span class="switch-label" id="mock-label">LIVE</span>

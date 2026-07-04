@@ -8,7 +8,7 @@ const SWEEP_SPEED = CONFIG.SWEEP_SPEED ?? 2.0; // radians / second
 const NEARBY_FRACTION = CONFIG.NEARBY_FRACTION ?? 1 / 3;
 const DEFAULT_CENTER = {
   lat: CONFIG.DEFAULT_LAT ?? 42.6967,
-  lon: CONFIG.DEFAULT_LON ?? 23.4114,
+  lon: CONFIG.DEFAULT_LON ?? 23.4167,
 };
 const DEFAULT_RADIUS = CONFIG.DEFAULT_RADIUS_KM ?? 25;
 
@@ -103,11 +103,16 @@ const SVG_MUTED = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15
 const latInput = document.getElementById("lat");
 const lonInput = document.getElementById("lon");
 const radiusInput = document.getElementById("radius");
+const markLatInput = document.getElementById("mark-lat");
+const markLonInput = document.getElementById("mark-lon");
+const markClearBtn = document.getElementById("mark-clear");
 
 // ----- State -----
 const state = {
   center: { ...DEFAULT_CENTER },
   radius: DEFAULT_RADIUS,
+  // Optional static reference point plotted on the radar (null when unset).
+  marker: null,
 };
 
 let mockMode = localStorage.getItem("mockMode") === "true";
@@ -126,6 +131,12 @@ const blipPositions = new Map(); // icao24 -> {x, y} CSS pixels, for click detec
 // *entry* into an alert state (arriving/departing) — including a plane that was
 // already on the radar as cruising/ground and then climbs out as "departing".
 const alertedClass = new Map(); // icao24 -> trend classification (_effective) last poll
+// icao24s that have already dinged during their current stretch of presence on
+// the radar. Cleared only when the aircraft leaves (same lifecycle as
+// alertedClass), so each contact dings once per appearance — state flips while
+// it stays on screen (e.g. arriving->departing, or classification jitter) do
+// not re-ding. A genuine return after leaving dings again.
+const alertedWhilePresent = new Set();
 // Every aircraft that triggered an audio alert, mapped to the timestamp its
 // breathing should stop. Each ding adds an entry, so every alert has a matching
 // flashing card for CARD_NOTICE_MS.
@@ -178,10 +189,23 @@ function resizeCanvas() {
 }
 
 // ----- Inputs / persistence (localStorage) -----
+// Round a coordinate to 5 decimal places (~1 m precision), dropping trailing
+// zeros. NaN passes through unchanged.
+function round5(v) {
+  return Math.round(v * 1e5) / 1e5;
+}
+
+// Normalise a coordinate field's displayed value to 5 decimals (e.g. after a
+// long paste).
+function normalizeCoord(input) {
+  const v = parseFloat(input.value);
+  if (!Number.isNaN(v)) input.value = String(round5(v));
+}
+
 function readInputs() {
   return {
-    lat: parseFloat(latInput.value),
-    lon: parseFloat(lonInput.value),
+    lat: round5(parseFloat(latInput.value)),
+    lon: round5(parseFloat(lonInput.value)),
     radius: parseFloat(radiusInput.value),
   };
 }
@@ -193,6 +217,10 @@ function loadParams() {
   latInput.value = lat !== null ? lat : DEFAULT_CENTER.lat;
   lonInput.value = lon !== null ? lon : DEFAULT_CENTER.lon;
   radiusInput.value = radius !== null ? radius : DEFAULT_RADIUS;
+  const markLat = localStorage.getItem("markLat");
+  const markLon = localStorage.getItem("markLon");
+  if (markLat !== null) markLatInput.value = markLat;
+  if (markLon !== null) markLonInput.value = markLon;
 }
 
 function persistParams() {
@@ -200,6 +228,22 @@ function persistParams() {
   if (!Number.isNaN(lat)) localStorage.setItem("lat", String(lat));
   if (!Number.isNaN(lon)) localStorage.setItem("lon", String(lon));
   if (!Number.isNaN(radius)) localStorage.setItem("radius", String(radius));
+  // Marker is optional: store when both set, otherwise clear.
+  if (markLatInput.value && markLonInput.value) {
+    localStorage.setItem("markLat", markLatInput.value);
+    localStorage.setItem("markLon", markLonInput.value);
+  } else {
+    localStorage.removeItem("markLat");
+    localStorage.removeItem("markLon");
+  }
+}
+
+// Read the optional marker inputs into state.marker (null unless both valid).
+function updateMarker() {
+  const mlat = round5(parseFloat(markLatInput.value));
+  const mlon = round5(parseFloat(markLonInput.value));
+  state.marker =
+    Number.isNaN(mlat) || Number.isNaN(mlon) ? null : { lat: mlat, lon: mlon };
 }
 
 function updateMockButton() {
@@ -215,10 +259,13 @@ function updateSoundButton() {
   soundIconEl.classList.toggle("muted", !soundEnabled);
 }
 
-// ----- Data-link warning light -----
-function setWarning(on, msg = "") {
-  dataStatusEl.classList.toggle("alert", on);
-  dataStatusMsg.textContent = on ? msg : "";
+// ----- Data-link status light -----
+// state: "ok" (solid green, steady) | "error" (red blinking + red text) |
+// "nodata" (green dot + amber text, breathing in sync).
+function setDataStatus(state, msg = "") {
+  dataStatusEl.classList.toggle("error", state === "error");
+  dataStatusEl.classList.toggle("nodata", state === "nodata");
+  dataStatusMsg.textContent = msg;
 }
 
 // ----- Audio alerts -----
@@ -355,17 +402,27 @@ function detectNewAircraft(list, now) {
     present.add(ac.icao24);
     const eff = ac._effective;
     const isAlertState = eff === "arriving" || eff === "departing";
-    if (isAlertState && alertedClass.get(ac.icao24) !== eff && ac._dist > alertDist) {
+    const isEntry = alertedClass.get(ac.icao24) !== eff;
+    if (
+      isAlertState &&
+      isEntry &&
+      !alertedWhilePresent.has(ac.icao24) &&
+      ac._dist > alertDist
+    ) {
       alertAc = ac;
       alertDist = ac._dist;
     }
   }
   // Record this poll's trend state for everyone present (and drop the gone) so
   // the next poll can detect a fresh transition rather than a sustained state.
+  // Aircraft that have left also lose their once-per-presence ding lock, so a
+  // genuine return dings again.
   for (const id of alertedClass.keys()) if (!present.has(id)) alertedClass.delete(id);
+  for (const id of alertedWhilePresent) if (!present.has(id)) alertedWhilePresent.delete(id);
   for (const ac of list) alertedClass.set(ac.icao24, ac._effective);
 
   if (alertAc !== null) {
+    alertedWhilePresent.add(alertAc.icao24);
     notified.set(alertAc.icao24, now + CARD_NOTICE_MS);
     pendingScrollIcao = alertAc.icao24;
     playAlert();
@@ -389,7 +446,7 @@ async function fetchData() {
   try {
     const resp = await fetch(`/aircraft?${params.toString()}`);
     if (!resp.ok) {
-      setWarning(true, "SERVER ERROR");
+      setDataStatus("error", "SERVER ERROR");
       return;
     }
     const data = await resp.json();
@@ -489,9 +546,9 @@ async function fetchData() {
     detectNewAircraft(list, now);
     renderCards();
 
-    setWarning(list.length === 0, "NO DATA");
+    setDataStatus(list.length === 0 ? "nodata" : "ok", list.length === 0 ? "NO DATA" : "");
   } catch (err) {
-    setWarning(true, "NO CONNECTION");
+    setDataStatus("error", "NO CONNECTION");
   }
 }
 
@@ -621,7 +678,9 @@ function renderCards() {
     card.dataset.icao = ac.icao24;
 
     const callsign = ac.callsign || ac.icao24 || "——";
-    const type = ac.type ? `<span class="type">${ac.type}</span>` : "";
+    // Card shows the full aircraft name; the radar blip keeps the short code.
+    const fullType = ac.type_full || ac.type;
+    const type = fullType ? `<span class="type">${fullType}</span>` : "";
     const alt = `<span class="alt">${Math.round(ac.altitude_m)} m</span>`;
 
     const key = photoKey(ac);
@@ -637,13 +696,14 @@ function renderCards() {
         <div class="card-top">
           <span class="callsign">${callsign}</span>
           <span class="badge">${statusLabel(ac)}</span>
+          ${alt}
         </div>
-        <div class="type-alt">${type} ${alt}</div>
+        <div class="type-line">${type}</div>
         ${routeHtml(ac)}
         <div class="meta">
           ${ac._dist.toFixed(1)} km · brg ${Math.round((ac._bearing + 360) % 360)}°
           · hdg ${Math.round(ac.heading_deg)}°
-          · ${Math.round(ac.velocity_kmh)} km/h
+          · <span class="speed">${Math.round(ac.velocity_kmh)} km/h</span>
         </div>
       </div>`;
 
@@ -668,27 +728,73 @@ function drawBackground(cx, cy, R) {
     ctx.stroke();
   }
 
+  // Cross lines, with a gap at each arm end so no line runs behind the
+  // compass letters.
+  const GAP = 22;
   ctx.strokeStyle = "rgba(0, 255, 102, 0.25)";
   ctx.beginPath();
-  ctx.moveTo(cx - R, cy);
-  ctx.lineTo(cx + R, cy);
-  ctx.moveTo(cx, cy - R);
-  ctx.lineTo(cx, cy + R);
+  ctx.moveTo(cx - R + GAP, cy);
+  ctx.lineTo(cx + R - GAP, cy);
+  ctx.moveTo(cx, cy - R + GAP);
+  ctx.lineTo(cx, cy + R - GAP);
   ctx.stroke();
 
-  ctx.fillStyle = "rgba(0, 255, 102, 0.8)";
-  ctx.font = "14px monospace";
+  // Ring distances along the right (East) arm — small, rounded km with no unit,
+  // right-anchored just inside each ring line (above the arm) so the numbers sit
+  // between the arcs instead of overlapping them.
+  ctx.fillStyle = "rgba(120, 255, 180, 0.85)";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  for (let i = 1; i <= RING_COUNT; i++) {
+    const ringR = (R * i) / RING_COUNT;
+    const dist = Math.round((state.radius * i) / RING_COUNT);
+    ctx.fillText(String(dist), cx + ringR - 4, cy - 3);
+  }
+
+  // Compass letters — no line behind them (see GAP above). North is red (the
+  // conventional heading reference); the rest are white.
+  ctx.font = "bold 14px monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  ctx.fillStyle = "#ff4d4d";
   ctx.fillText("N", cx, cy - R + 11);
+  ctx.fillStyle = "#ffffff";
   ctx.fillText("S", cx, cy + R - 11);
   ctx.fillText("E", cx + R - 11, cy);
   ctx.fillText("W", cx - R + 11, cy);
+}
 
-  ctx.fillStyle = "rgba(0, 255, 102, 0.6)";
-  ctx.font = "13px monospace";
-  ctx.textAlign = "left";
-  ctx.fillText(`${Math.round(state.radius)} km`, cx + 6, cy - R * 0.5);
+// Static reference marker (no fade — only aircraft fade). Plotted from the
+// optional marker coordinates at its bearing/distance from the radar center;
+// skipped when unset or beyond the current radius.
+function drawMarker(cx, cy, R) {
+  const m = state.marker;
+  if (!m) return;
+  const dist = haversineKm(state.center.lat, state.center.lon, m.lat, m.lon);
+  if (dist / state.radius > 1) return;
+  const brg = bearingDeg(state.center.lat, state.center.lon, m.lat, m.lon);
+  const r = (dist / state.radius) * R;
+  const x = cx + r * Math.sin(toRad(brg));
+  const y = cy - r * Math.cos(toRad(brg));
+
+  ctx.save();
+  ctx.globalAlpha = 0.5; // half visible
+  ctx.strokeStyle = "#ffb300";
+  ctx.fillStyle = "#ffb300";
+  ctx.lineWidth = 1.5;
+  const s = 7;
+  ctx.beginPath(); // diamond outline
+  ctx.moveTo(x, y - s);
+  ctx.lineTo(x + s, y);
+  ctx.lineTo(x, y + s);
+  ctx.lineTo(x - s, y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.beginPath(); // center dot
+  ctx.arc(x, y, 2, 0, TAU);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawSweep(cx, cy, R) {
@@ -824,6 +930,7 @@ function frame(now) {
   ctx.fillRect(0, 0, size, size);
 
   drawBackground(cx, cy, R);
+  drawMarker(cx, cy, R);
   drawSweep(cx, cy, R);
   drawAircraft(cx, cy, R);
 
@@ -860,6 +967,27 @@ form.addEventListener("submit", (e) => {
 for (const input of [latInput, lonInput, radiusInput]) {
   input.addEventListener("change", persistParams);
 }
+
+// Round coordinate fields to 5 decimals once edited/pasted (the value sent on
+// Update is rounded via readInputs/updateMarker regardless).
+for (const input of [latInput, lonInput, markLatInput, markLonInput]) {
+  input.addEventListener("change", () => normalizeCoord(input));
+}
+
+// Marker updates live as it's typed; cleared by emptying or the ✕ button.
+for (const input of [markLatInput, markLonInput]) {
+  input.addEventListener("input", () => {
+    updateMarker();
+    persistParams();
+  });
+}
+
+markClearBtn.addEventListener("click", () => {
+  markLatInput.value = "";
+  markLonInput.value = "";
+  updateMarker();
+  persistParams();
+});
 
 mockToggle.addEventListener("click", () => {
   mockMode = !mockMode;
@@ -901,6 +1029,7 @@ if (!Number.isNaN(initial.lat) && !Number.isNaN(initial.lon)) {
   state.center = { lat: initial.lat, lon: initial.lon };
 }
 if (!Number.isNaN(initial.radius)) state.radius = initial.radius;
+updateMarker();
 
 resizeCanvas();
 updateMockButton();
